@@ -63,6 +63,7 @@ public static class ZoneLoader
             catch { continue; } // a malformed texture must never crash the whole zone load
             if (img is null || texMat.ContainsKey(img.Id)) continue;
             var gimg = Image.CreateFromData(img.Width, img.Height, false, Image.Format.Rgba8, img.Rgba);
+            gimg.GenerateMipmaps(); // low-res FFXI textures alias badly without mips
             var itex = ImageTexture.CreateFromImage(gimg);
             // grass proxy: prefer the largest green-dominant, mid-bright texture.
             long sr = 0, sg = 0, sb = 0; int n = img.Width * img.Height;
@@ -77,6 +78,7 @@ public static class ZoneLoader
             {
                 AlbedoTexture = itex,
                 CullMode = BaseMaterial3D.CullModeEnum.Disabled,
+                TextureFilter = BaseMaterial3D.TextureFilterEnum.LinearWithMipmapsAnisotropic,
                 ShadingMode = unlit ? BaseMaterial3D.ShadingModeEnum.Unshaded : BaseMaterial3D.ShadingModeEnum.PerPixel,
                 // NOTE: alpha cutout deferred — FFXI's 0..128 alpha convention (and DXT3's
                 // 4-bit alpha rescale) needs its own pass; scissor at 0.5 erased most texels.
