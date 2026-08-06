@@ -114,8 +114,12 @@ public static class ZoneLoader
             foreach (var inst in MzbDecoder.Decode(payload))
             {
                 if (!meshesById.TryGetValue(inst.Id, out var meshList)) { missing++; continue; }
-                var fbasis = Basis.FromEuler(new Vector3(inst.RotX, inst.RotY, inst.RotZ), EulerOrder.Xyz)
-                    .Scaled(new Vector3(inst.ScaleX, inst.ScaleY, inst.ScaleZ));
+                // teschnei: model = translate · rotate · scale, i.e. scale is applied to the
+                // vertex FIRST (local). Godot's Basis.Scaled() scales in GLOBAL space (S·R),
+                // which misplaces non-uniform/negative-scale tiles — that was the sink/raise
+                // bug. Build R·S explicitly instead.
+                var rot = Basis.FromEuler(new Vector3(inst.RotX, inst.RotY, inst.RotZ), EulerOrder.Xyz);
+                var fbasis = rot * Basis.Identity.Scaled(new Vector3(inst.ScaleX, inst.ScaleY, inst.ScaleZ));
                 var xform = new Transform3D(fbasis, new Vector3(inst.PosX, inst.PosY, inst.PosZ));
                 // net world = flipY(det -1) · fbasis. Reverse winding when net is a reflection
                 // so all baked triangles wind consistently for the normal computation.
