@@ -81,6 +81,26 @@ public partial class Main : Node3D
                 },
             });
 
+            // Entity render check: VELLICHOR_ENT_DEMO places a few demo entities (the live
+            // bridge will feed a real WorldState here instead).
+            if (System.Environment.GetEnvironmentVariable("VELLICHOR_ENT_DEMO") != null)
+            {
+                var er = new Vellichor.Render.EntityRenderer();
+                AddChild(er);
+                var ec = b.GetCenter();
+                var demo = new XiHeadless.Game.WorldState();
+                for (int i = 0; i < 5; i++)
+                    demo.Entities[(uint)(100 + i)] = new XiHeadless.Game.Entity
+                    {
+                        Id = (uint)(100 + i), Index = (ushort)(0x100 + i),
+                        Name = i == 0 ? "You" : $"NPC_{i}",
+                        // WorldState positions are FFXI (Y-down); renderer flips. Use -center.Y.
+                        X = ec.X + (i - 2) * 12, Y = -ec.Y, Z = ec.Z + (i % 2) * 12,
+                        Allegiance = (byte)(i == 0 ? 1 : i % 3), TypeKnown = true,
+                    };
+                er.Update(demo);
+            }
+
             var c = b.GetCenter();
             if (System.Environment.GetEnvironmentVariable("VELLICHOR_GROUND") != null)
             {
