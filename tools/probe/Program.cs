@@ -283,6 +283,14 @@ int Coll(string? file)
     var data = File.ReadAllBytes(file);
     var mzb = ChunkReader.Walk(data).FirstOrDefault(c => c.Type == 0x1c);
     if (mzb.LengthBytes == 0) { Console.Error.WriteLine("no MZB"); return 1; }
+    // Header grid params (decrypt a copy) — the ×10 grid formula assumes bucketWidth==40.
+    var hp = data.AsSpan(mzb.PayloadOffset, mzb.PayloadLength).ToArray();
+    DatCrypt.DecodeMzb(hp, hp.Length);
+    int collOff = (int)BitConverter.ToUInt32(hp, 0x08);
+    Console.WriteLine($"gridWidth(0x0C)={hp[0x0C]} gridHeight(0x0D)={hp[0x0D]} bucketWidth(0x0E)={hp[0x0E]} bucketHeight(0x0F)={hp[0x0F]}");
+    Console.WriteLine($"grid via ×10 = {hp[0x0C] * 10} x {hp[0x0D] * 10};  via (cells*bucket)>>2 = {(hp[0x0C] * hp[0x0E]) >> 2} x {(hp[0x0D] * hp[0x0F]) >> 2}");
+    Console.WriteLine($"collisionMeshOffset=0x{collOff:x}  mesh_count={BitConverter.ToUInt32(hp, collOff):N0}  grid_offset=0x{BitConverter.ToUInt32(hp, collOff + 0x10):x}");
+
     var m = MzbCollisionDecoder.Decode(data.AsSpan(mzb.PayloadOffset, mzb.PayloadLength).ToArray());
     if (m is null) { Console.WriteLine("collision decode returned null"); return 0; }
     float mnx = float.MaxValue, mny = float.MaxValue, mnz = float.MaxValue, mxx = float.MinValue, mxy = float.MinValue, mxz = float.MinValue;

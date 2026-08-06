@@ -113,7 +113,15 @@ public static class MzbCollisionDecoder
                 positions.Add(-wy); // FFXI Y-down -> Godot Y-up
                 positions.Add(wz);
             }
-            foreach (int ix in meshIdx[geoOff]) indices.Add(baseIdx + ix);
+            // Reverse winding to compensate for the Y-negation above (a mirror flips winding);
+            // otherwise computed normals point INTO the surface and it renders inside-out.
+            var mi = meshIdx[geoOff];
+            for (int t = 0; t + 2 < mi.Length; t += 3)
+            {
+                indices.Add(baseIdx + mi[t]);
+                indices.Add(baseIdx + mi[t + 2]);
+                indices.Add(baseIdx + mi[t + 1]);
+            }
         }
 
         if (positions.Count == 0) return null;
