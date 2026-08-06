@@ -32,8 +32,9 @@ public static class ZoneLoader
         string zoneCode = chunks.Count > 0 ? chunks[0].Name : "?";
         string zoneName = ZoneName(zoneCode);
 
-        // Decode + build a shared ArrayMesh list per MMB id (each id may hold several meshes).
-        var meshesById = new Dictionary<string, List<ArrayMesh>>();
+        // Decode + build a shared ArrayMesh list per MMB id. Each mesh keeps its texture id
+        // so the right material can be bound per surface.
+        var meshesById = new Dictionary<string, List<(ArrayMesh mesh, string? tex)>>();
         int models = 0;
         foreach (var c in chunks)
         {
@@ -41,19 +42,39 @@ public static class ZoneLoader
             var payload = data.AsSpan(c.PayloadOffset, c.PayloadLength).ToArray();
             var mmb = MmbDecoder.Decode(payload);
             if (mmb.Meshes.Count == 0) continue;
-            var list = mmb.Meshes.Select(ZoneRenderer.BuildArrayMesh).ToList();
-            meshesById[mmb.MmbId] = list;
-            models += list.Count;
+            meshesById[mmb.MmbId] = mmb.Meshes.Select(md => (ZoneRenderer.BuildArrayMesh(md), md.TextureId)).ToList();
+            models += mmb.Meshes.Count;
         }
         double decodeMs = sw.Elapsed.TotalMilliseconds - readMs;
 
+        bool unlit = System.Environment.GetEnvironmentVariable("VELLICHOR_UNLIT") != null;
+
+        // Decode IMG (0x20) textures and build one material per texture id.
+        var texMat = new Dictionary<string, StandardMaterial3D>();
+        foreach (var c in chunks)
+        {
+            if (c.Type != 0x20) continue;
+            ImgTexture? img;
+            try { img = ImgDecoder.Decode(data.AsSpan(c.PayloadOffset, c.PayloadLength).ToArray()); }
+            catch { continue; } // a malformed texture must never crash the whole zone load
+            if (img is null || texMat.ContainsKey(img.Id)) continue;
+            var gimg = Image.CreateFromData(img.Width, img.Height, false, Image.Format.Rgba8, img.Rgba);
+            texMat[img.Id] = new StandardMaterial3D
+            {
+                AlbedoTexture = ImageTexture.CreateFromImage(gimg),
+                CullMode = BaseMaterial3D.CullModeEnum.Disabled,
+                ShadingMode = unlit ? BaseMaterial3D.ShadingModeEnum.Unshaded : BaseMaterial3D.ShadingModeEnum.PerPixel,
+            };
+        }
+
+        // Fallback material for meshes with no matching texture.
         var mat = new StandardMaterial3D
         {
             AlbedoColor = new Color(0.72f, 0.73f, 0.70f),
-            CullMode = BaseMaterial3D.CullModeEnum.Disabled, // double-sided while winding is unverified
+            CullMode = BaseMaterial3D.CullModeEnum.Disabled,
         };
-        if (System.Environment.GetEnvironmentVariable("VELLICHOR_UNLIT") != null)
-            mat.ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded; // diagnostic: geometry coverage
+        if (unlit) mat.ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded;
+        StandardMaterial3D MatFor(string? tex) => tex != null && texMat.TryGetValue(tex, out var m) ? m : mat;
 
         int placed = 0, missing = 0;
         Vector3 min = new(float.MaxValue, float.MaxValue, float.MaxValue);
@@ -70,7 +91,8 @@ public static class ZoneLoader
                 var basis = Basis.FromEuler(new Vector3(-inst.RotX, inst.RotY, -inst.RotZ), EulerOrder.Xyz)
                     .Scaled(new Vector3(inst.ScaleX, inst.ScaleY, inst.ScaleZ));
                 var node = new Node3D { Transform = new Transform3D(basis, new Vector3(inst.PosX, -inst.PosY, inst.PosZ)) };
-                foreach (var mesh in meshList) node.AddChild(new MeshInstance3D { Mesh = mesh, MaterialOverride = mat });
+                foreach (var (mesh, tex) in meshList)
+                    node.AddChild(new MeshInstance3D { Mesh = mesh, MaterialOverride = MatFor(tex) });
                 root.AddChild(node);
                 placed++;
                 // World-space position (root flips Y): track for camera placement.
@@ -85,7 +107,7 @@ public static class ZoneLoader
 
         report = $"{zoneName} [{zoneCode}] loaded in {sw.Elapsed.TotalMilliseconds:0} ms " +
                  $"(read {readMs:0}, decode {decodeMs:0}) — {meshesById.Count} MMB ids / {models} meshes, " +
-                 $"{placed} instances placed, {missing} unresolved.";
+                 $"{texMat.Count} textures, {placed} instances placed, {missing} unresolved.";
         return root;
     }
 
