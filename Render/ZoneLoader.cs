@@ -34,7 +34,8 @@ public static class ZoneLoader
 
         // Decode + build a shared ArrayMesh list per MMB id. Each mesh keeps its texture id
         // so the right material can be bound per surface.
-        var meshesById = new Dictionary<string, List<(ArrayMesh mesh, string? tex)>>();
+        // Two variants per mesh: normal, and a pre-negated-normal one for mirrored instances.
+        var meshesById = new Dictionary<string, List<(ArrayMesh normal, ArrayMesh flipped, string? tex)>>();
         int models = 0;
         foreach (var c in chunks)
         {
@@ -42,7 +43,8 @@ public static class ZoneLoader
             var payload = data.AsSpan(c.PayloadOffset, c.PayloadLength).ToArray();
             var mmb = MmbDecoder.Decode(payload);
             if (mmb.Meshes.Count == 0) continue;
-            meshesById[mmb.MmbId] = mmb.Meshes.Select(md => (ZoneRenderer.BuildArrayMesh(md), md.TextureId)).ToList();
+            meshesById[mmb.MmbId] = mmb.Meshes
+                .Select(md => (ZoneRenderer.BuildArrayMesh(md), ZoneRenderer.BuildArrayMesh(md, true), md.TextureId)).ToList();
             models += mmb.Meshes.Count;
         }
         double decodeMs = sw.Elapsed.TotalMilliseconds - readMs;
@@ -101,15 +103,15 @@ public static class ZoneLoader
             foreach (var inst in MzbDecoder.Decode(payload))
             {
                 if (!meshesById.TryGetValue(inst.Id, out var meshList)) { missing++; continue; }
-                // Meshes are baked to Y-up (a reflection). Applying the raw FFXI scale adds a
-                // SECOND reflection for negative-scale (mirrored) instances, which rendered
-                // them inside-out / upside-down. Use |scale|: the mirror is imperceptible on
-                // terrain and this keeps the transform reflection-free so tiles stay upright.
+                // REAL scale (keeps negative-scale tiles' true shape/height). Mirrored
+                // (negative-determinant) instances use the pre-negated-normal mesh so Godot's
+                // reflection leaves normals pointing outward — correct shape AND correct light.
                 var basis = Basis.FromEuler(new Vector3(-inst.RotX, inst.RotY, -inst.RotZ), EulerOrder.Xyz)
-                    .Scaled(new Vector3(Mathf.Abs(inst.ScaleX), Mathf.Abs(inst.ScaleY), Mathf.Abs(inst.ScaleZ)));
+                    .Scaled(new Vector3(inst.ScaleX, inst.ScaleY, inst.ScaleZ));
                 var node = new Node3D { Transform = new Transform3D(basis, new Vector3(inst.PosX, -inst.PosY, inst.PosZ)) };
-                foreach (var (mesh, tex) in meshList)
-                    node.AddChild(new MeshInstance3D { Mesh = mesh, MaterialOverride = MatFor(tex) });
+                bool mirrored = inst.ScaleX * inst.ScaleY * inst.ScaleZ < 0;
+                foreach (var (normal, flipped, tex) in meshList)
+                    node.AddChild(new MeshInstance3D { Mesh = mirrored ? flipped : normal, MaterialOverride = MatFor(tex) });
                 root.AddChild(node);
                 placed++;
                 // World-space position (root flips Y): track for camera placement.
