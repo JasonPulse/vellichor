@@ -101,10 +101,12 @@ public static class ZoneLoader
             foreach (var inst in MzbDecoder.Decode(payload))
             {
                 if (!meshesById.TryGetValue(inst.Id, out var meshList)) { missing++; continue; }
-                // Meshes are baked to Y-up, so place with the conjugated (flipY · T · flipY)
-                // transform: translation Y negated, rotation X/Z negated, scale unchanged.
+                // Meshes are baked to Y-up (a reflection). Applying the raw FFXI scale adds a
+                // SECOND reflection for negative-scale (mirrored) instances, which rendered
+                // them inside-out / upside-down. Use |scale|: the mirror is imperceptible on
+                // terrain and this keeps the transform reflection-free so tiles stay upright.
                 var basis = Basis.FromEuler(new Vector3(-inst.RotX, inst.RotY, -inst.RotZ), EulerOrder.Xyz)
-                    .Scaled(new Vector3(inst.ScaleX, inst.ScaleY, inst.ScaleZ));
+                    .Scaled(new Vector3(Mathf.Abs(inst.ScaleX), Mathf.Abs(inst.ScaleY), Mathf.Abs(inst.ScaleZ)));
                 var node = new Node3D { Transform = new Transform3D(basis, new Vector3(inst.PosX, -inst.PosY, inst.PosZ)) };
                 foreach (var (mesh, tex) in meshList)
                     node.AddChild(new MeshInstance3D { Mesh = mesh, MaterialOverride = MatFor(tex) });
@@ -120,7 +122,7 @@ public static class ZoneLoader
         // just below the visual tiles so textures win where they exist and this fills the
         // gaps/paths (no more see-through holes). Already world-space + Y-flipped in the decoder.
         int collVerts = 0;
-        if (mzb.LengthBytes > 0)
+        if (mzb.LengthBytes > 0 && System.Environment.GetEnvironmentVariable("VELLICHOR_FILL") != null)
         {
             var coll = MzbCollisionDecoder.Decode(data.AsSpan(mzb.PayloadOffset, mzb.PayloadLength).ToArray());
             if (coll is { VertexCount: > 0 })

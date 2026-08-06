@@ -56,9 +56,9 @@ public partial class Main : Node3D
             var c = b.GetCenter();
             if (System.Environment.GetEnvironmentVariable("VELLICHOR_GROUND") != null)
             {
-                // Top-down plan view: inverted-normal tiles show as dark patches from above.
-                cam.Position = new Vector3(c.X, b.Position.Y + b.Size.Y + 350, c.Z);
-                cam.RotationDegrees = new Vector3(-90, 0, 0);
+                // Shallow eye-level-ish field view to confirm tiles/foliage are upright.
+                cam.Position = new Vector3(c.X, b.Position.Y + b.Size.Y + 20, c.Z + 120);
+                cam.RotationDegrees = new Vector3(-10, 0, 0);
             }
             else
             {
