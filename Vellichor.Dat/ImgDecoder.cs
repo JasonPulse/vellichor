@@ -108,8 +108,11 @@ public static class ImgDecoder
                     int px = bx * 4 + (k & 3), py = by * 4 + (k >> 2);
                     int o = (py * w + px) * 4;
                     rgba[o] = c[k * 4]; rgba[o + 1] = c[k * 4 + 1]; rgba[o + 2] = c[k * 4 + 2];
-                    // DXT3: explicit 4-bit alpha per texel (8 bytes at bp), nibble k -> a*17.
-                    rgba[o + 3] = dxt3 ? (byte)(((p[bp + (k >> 1)] >> ((k & 1) * 4)) & 0xF) * 17) : c[k * 4 + 3];
+                    // DXT3: explicit 4-bit alpha (8 bytes at bp). FFXI's "opaque" is ~half-max
+                    // (0..8 like the 8-bit 0..128 convention), so scale *32 (clamped) -> opaque=255.
+                    rgba[o + 3] = dxt3
+                        ? (byte)System.Math.Min(255, ((p[bp + (k >> 1)] >> ((k & 1) * 4)) & 0xF) * 32)
+                        : c[k * 4 + 3];
                 }
             }
     }

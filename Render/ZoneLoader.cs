@@ -66,22 +66,29 @@ public static class ZoneLoader
             gimg.GenerateMipmaps(); // low-res FFXI textures alias badly without mips
             var itex = ImageTexture.CreateFromImage(gimg);
             // grass proxy: prefer the largest green-dominant, mid-bright texture.
-            long sr = 0, sg = 0, sb = 0; int n = img.Width * img.Height;
-            for (int i = 0; i < n; i++) { sr += img.Rgba[i * 4]; sg += img.Rgba[i * 4 + 1]; sb += img.Rgba[i * 4 + 2]; }
+            // Also count transparent texels to decide alpha-cutout (foliage/fences) vs opaque.
+            long sr = 0, sg = 0, sb = 0; int n = img.Width * img.Height, transp = 0;
+            for (int i = 0; i < n; i++)
+            {
+                sr += img.Rgba[i * 4]; sg += img.Rgba[i * 4 + 1]; sb += img.Rgba[i * 4 + 2];
+                if (img.Rgba[i * 4 + 3] < 128) transp++;
+            }
             double avgLum = (sr + sg + sb) / (double)(n * 3);
             if (n > 0 && avgLum is > 50 and < 210 && sg > sr * 1.05 && sg > sb * 1.05)
             {
                 long score = (long)img.Width * img.Height;
                 if (score > grassScore) { grassScore = score; grassTex = itex; }
             }
+            _ = transp; // (FFXI DXT3 alpha isn't a clean cutout channel for ground — see below)
             texMat[img.Id] = new StandardMaterial3D
             {
                 AlbedoTexture = itex,
                 CullMode = BaseMaterial3D.CullModeEnum.Disabled,
                 TextureFilter = BaseMaterial3D.TextureFilterEnum.LinearWithMipmapsAnisotropic,
                 ShadingMode = unlit ? BaseMaterial3D.ShadingModeEnum.Unshaded : BaseMaterial3D.ShadingModeEnum.PerPixel,
-                // NOTE: alpha cutout deferred — FFXI's 0..128 alpha convention (and DXT3's
-                // 4-bit alpha rescale) needs its own pass; scissor at 0.5 erased most texels.
+                // Alpha-cutout deferred: FFXI ground DXT3 alpha is low/varied (not a
+                // transparency mask), so scissor speckled the terrain. Needs per-texture
+                // classification (foliage vs ground) beyond a simple alpha threshold.
             };
         }
 
