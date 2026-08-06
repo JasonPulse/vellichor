@@ -34,8 +34,8 @@ public static class ZoneLoader
 
         // Decode + build a shared ArrayMesh list per MMB id. Each mesh keeps its texture id
         // so the right material can be bound per surface.
-        // Two variants per mesh: normal, and a pre-negated-normal one for mirrored instances.
-        var meshesById = new Dictionary<string, List<(ArrayMesh normal, ArrayMesh flipped, string? tex)>>();
+        // Raw (FFXI-local) mesh data per id; instances are baked to world space on the CPU below.
+        var meshesById = new Dictionary<string, List<MeshData>>();
         int models = 0;
         foreach (var c in chunks)
         {
@@ -43,8 +43,7 @@ public static class ZoneLoader
             var payload = data.AsSpan(c.PayloadOffset, c.PayloadLength).ToArray();
             var mmb = MmbDecoder.Decode(payload);
             if (mmb.Meshes.Count == 0) continue;
-            meshesById[mmb.MmbId] = mmb.Meshes
-                .Select(md => (ZoneRenderer.BuildArrayMesh(md), ZoneRenderer.BuildArrayMesh(md, true), md.TextureId)).ToList();
+            meshesById[mmb.MmbId] = mmb.Meshes;
             models += mmb.Meshes.Count;
         }
         double decodeMs = sw.Elapsed.TotalMilliseconds - readMs;
@@ -93,6 +92,18 @@ public static class ZoneLoader
         if (unlit) mat.ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded;
         StandardMaterial3D MatFor(string? tex) => tex != null && texMat.TryGetValue(tex, out var m) ? m : mat;
 
+        // Bake every instance to world space on the CPU: apply teschnei's exact transform
+        // translate·rotate(euler XYZ)·scale in FFXI coords (REAL scale — no conjugation, no
+        // abs, so heights are exactly right and negative-scale tiles contour correctly), then
+        // ONE Y-flip to Godot. Accumulate per texture; normals are computed from the final
+        // geometry so lighting is always correct regardless of any per-instance reflection.
+        var acc = new Dictionary<string?, (List<float> pos, List<float> uv, List<int> idx)>();
+        (List<float> pos, List<float> uv, List<int> idx) AccFor(string? t)
+        {
+            if (!acc.TryGetValue(t, out var a)) { a = (new(), new(), new()); acc[t] = a; }
+            return a;
+        }
+
         int placed = 0, missing = 0;
         Vector3 min = new(float.MaxValue, float.MaxValue, float.MaxValue);
         Vector3 max = new(float.MinValue, float.MinValue, float.MinValue);
@@ -103,22 +114,50 @@ public static class ZoneLoader
             foreach (var inst in MzbDecoder.Decode(payload))
             {
                 if (!meshesById.TryGetValue(inst.Id, out var meshList)) { missing++; continue; }
-                // REAL scale (keeps negative-scale tiles' true shape/height). Mirrored
-                // (negative-determinant) instances use the pre-negated-normal mesh so Godot's
-                // reflection leaves normals pointing outward — correct shape AND correct light.
-                var basis = Basis.FromEuler(new Vector3(-inst.RotX, inst.RotY, -inst.RotZ), EulerOrder.Xyz)
+                var fbasis = Basis.FromEuler(new Vector3(inst.RotX, inst.RotY, inst.RotZ), EulerOrder.Xyz)
                     .Scaled(new Vector3(inst.ScaleX, inst.ScaleY, inst.ScaleZ));
-                var node = new Node3D { Transform = new Transform3D(basis, new Vector3(inst.PosX, -inst.PosY, inst.PosZ)) };
-                bool mirrored = inst.ScaleX * inst.ScaleY * inst.ScaleZ < 0;
-                foreach (var (normal, flipped, tex) in meshList)
-                    node.AddChild(new MeshInstance3D { Mesh = mirrored ? flipped : normal, MaterialOverride = MatFor(tex) });
-                root.AddChild(node);
+                var xform = new Transform3D(fbasis, new Vector3(inst.PosX, inst.PosY, inst.PosZ));
+                // net world = flipY(det -1) · fbasis. Reverse winding when net is a reflection
+                // so all baked triangles wind consistently for the normal computation.
+                bool reverse = fbasis.Determinant() > 0;
+                foreach (var md in meshList)
+                {
+                    var a = AccFor(md.TextureId);
+                    int baseIdx = a.pos.Count / 3;
+                    for (int v = 0; v < md.VertexCount; v++)
+                    {
+                        var wf = xform * new Vector3(md.Positions[v * 3], md.Positions[v * 3 + 1], md.Positions[v * 3 + 2]);
+                        float wx = wf.X, wy = -wf.Y, wz = wf.Z;
+                        a.pos.Add(wx); a.pos.Add(wy); a.pos.Add(wz);
+                        a.uv.Add(md.Uvs is { Length: > 0 } ? md.Uvs[v * 2] : 0);
+                        a.uv.Add(md.Uvs is { Length: > 0 } ? md.Uvs[v * 2 + 1] : 0);
+                        if (wx < min.X) min.X = wx; if (wy < min.Y) min.Y = wy; if (wz < min.Z) min.Z = wz;
+                        if (wx > max.X) max.X = wx; if (wy > max.Y) max.Y = wy; if (wz > max.Z) max.Z = wz;
+                    }
+                    var s = md.Indices;
+                    for (int t = 0; t + 2 < s.Length; t += 3)
+                    {
+                        a.idx.Add(baseIdx + s[t]);
+                        a.idx.Add(baseIdx + s[t + (reverse ? 2 : 1)]);
+                        a.idx.Add(baseIdx + s[t + (reverse ? 1 : 2)]);
+                    }
+                }
                 placed++;
-                // World-space position (root flips Y): track for camera placement.
-                var w = new Vector3(inst.PosX, -inst.PosY, inst.PosZ);
-                min = new Vector3(Mathf.Min(min.X, w.X), Mathf.Min(min.Y, w.Y), Mathf.Min(min.Z, w.Z));
-                max = new Vector3(Mathf.Max(max.X, w.X), Mathf.Max(max.Y, w.Y), Mathf.Max(max.Z, w.Z));
             }
+        }
+
+        // One mesh per texture with normals computed from the baked world geometry.
+        foreach (var (tex, a) in acc)
+        {
+            if (a.pos.Count == 0) continue;
+            var md = new MeshData
+            {
+                Positions = a.pos.ToArray(),
+                Normals = SmoothNormals(a.pos, a.idx),
+                Uvs = a.uv.ToArray(),
+                Indices = a.idx.ToArray(),
+            };
+            root.AddChild(new MeshInstance3D { Mesh = ZoneRenderer.BuildRawMesh(md), MaterialOverride = MatFor(tex) });
         }
         // Collision-mesh ground fill: the continuous walkable surface, rendered untextured
         // just below the visual tiles so textures win where they exist and this fills the
@@ -174,4 +213,26 @@ public static class ZoneLoader
         "f_ro" => "Ronfaure",
         _ => code,
     };
+
+    /// <summary>Smooth per-vertex normals from positions + triangle-list indices.</summary>
+    private static float[] SmoothNormals(System.Collections.Generic.List<float> pos, System.Collections.Generic.List<int> idx)
+    {
+        var nrm = new float[pos.Count];
+        for (int t = 0; t + 2 < idx.Count; t += 3)
+        {
+            int a = idx[t], b = idx[t + 1], c = idx[t + 2];
+            float ax = pos[a * 3], ay = pos[a * 3 + 1], az = pos[a * 3 + 2];
+            float ux = pos[b * 3] - ax, uy = pos[b * 3 + 1] - ay, uz = pos[b * 3 + 2] - az;
+            float vx = pos[c * 3] - ax, vy = pos[c * 3 + 1] - ay, vz = pos[c * 3 + 2] - az;
+            float nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+            foreach (int i in stackalloc[] { a, b, c }) { nrm[i * 3] += nx; nrm[i * 3 + 1] += ny; nrm[i * 3 + 2] += nz; }
+        }
+        for (int v = 0; v < pos.Count / 3; v++)
+        {
+            float nx = nrm[v * 3], ny = nrm[v * 3 + 1], nz = nrm[v * 3 + 2];
+            float len = (float)System.Math.Sqrt(nx * nx + ny * ny + nz * nz);
+            if (len > 1e-6f) { nrm[v * 3] = nx / len; nrm[v * 3 + 1] = ny / len; nrm[v * 3 + 2] = nz / len; }
+        }
+        return nrm;
+    }
 }

@@ -29,6 +29,13 @@ public static class ZoneRenderer
                 normals[i] = new Vector3(m.Normals[i * 3], m.Normals[i * 3 + 1], m.Normals[i * 3 + 2]);
             arrays[(int)Mesh.ArrayType.Normal] = normals;
         }
+        if (m.Uvs is { Length: > 0 })
+        {
+            var uvs = new Vector2[m.Uvs.Length / 2];
+            for (int i = 0; i < uvs.Length; i++)
+                uvs[i] = new Vector2(m.Uvs[i * 2], m.Uvs[i * 2 + 1]);
+            arrays[(int)Mesh.ArrayType.TexUV] = uvs;
+        }
         arrays[(int)Mesh.ArrayType.Index] = m.Indices;
         var mesh = new ArrayMesh();
         mesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);

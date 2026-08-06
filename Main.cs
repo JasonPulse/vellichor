@@ -56,8 +56,8 @@ public partial class Main : Node3D
             var c = b.GetCenter();
             if (System.Environment.GetEnvironmentVariable("VELLICHOR_GROUND") != null)
             {
-                cam.Position = new Vector3(c.X, b.Position.Y + b.Size.Y + 350, c.Z);
-                cam.RotationDegrees = new Vector3(-90, 0, 0);
+                cam.Position = new Vector3(c.X, b.Position.Y + b.Size.Y + 55, c.Z + 90);
+                cam.RotationDegrees = new Vector3(-28, 0, 0);
             }
             else
             {
