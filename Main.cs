@@ -53,6 +53,23 @@ public partial class Main : Node3D
             AddChild(zone);
             GD.Print("Zone: " + report);
 
+            // Water plane: the DAT has no ground under rivers/ponds, so drop a translucent
+            // plane near the low point — it shows through the no-ground regions as water and
+            // is occluded by the higher terrain elsewhere. (Approximate single level for now.)
+            var wc = b.GetCenter();
+            AddChild(new MeshInstance3D
+            {
+                Mesh = new PlaneMesh { Size = new Vector2(b.Size.X, b.Size.Z) },
+                Position = new Vector3(wc.X, b.Position.Y + 3f, wc.Z),
+                MaterialOverride = new StandardMaterial3D
+                {
+                    AlbedoColor = new Color(0.15f, 0.30f, 0.42f, 0.72f),
+                    Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
+                    Metallic = 0.3f, Roughness = 0.15f,
+                    CullMode = BaseMaterial3D.CullModeEnum.Disabled,
+                },
+            });
+
             var c = b.GetCenter();
             if (System.Environment.GetEnvironmentVariable("VELLICHOR_GROUND") != null)
             {

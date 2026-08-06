@@ -22,6 +22,7 @@ switch (mode)
     case "mzb": return Mzb(args.ElementAtOrDefault(1));
     case "tex": return Tex(args.ElementAtOrDefault(1));
     case "coll": return Coll(args.ElementAtOrDefault(1));
+    case "bench": return Bench(args.ElementAtOrDefault(1), args.ElementAtOrDefault(2));
     default: return IndexValidate(args);
 }
 
@@ -273,6 +274,42 @@ int Mzb(string? file)
             Console.WriteLine($"  id='{i.Id}' pos=({i.PosX:0.#},{i.PosY:0.#},{i.PosZ:0.#}) " +
                               $"rot=({i.RotX:0.##},{i.RotY:0.##},{i.RotZ:0.##}) scale=({i.ScaleX:0.##},{i.ScaleY:0.##},{i.ScaleZ:0.##})");
     }
+    return 0;
+}
+
+// ---- mode: bench ----------------------------------------------------------
+// Time the full decode pipeline (read + chunk walk + all MMB + MZB) over N iterations,
+// reporting the median. This is the "DAT bytes -> renderable geometry" cost; the Godot
+// mesh/GPU build adds on top but the decode is the part that killed retail zoning.
+int Bench(string? file, string? iters)
+{
+    if (file is null || !File.Exists(file)) { Console.Error.WriteLine("usage: bench <file.DAT> [iterations]"); return 1; }
+    int n = int.TryParse(iters, out var x) ? x : 15;
+    var times = new List<double>();
+    int verts = 0, tris = 0, meshes = 0, insts = 0;
+    var sw = new System.Diagnostics.Stopwatch();
+    for (int it = 0; it < n; it++)
+    {
+        sw.Restart();
+        var data = File.ReadAllBytes(file);
+        var chunks = ChunkReader.Walk(data);
+        int v = 0, t = 0, m = 0, ni = 0;
+        foreach (var c in chunks.Where(c => c.Type == 0x2e))
+        {
+            var mmb = MmbDecoder.Decode(data.AsSpan(c.PayloadOffset, c.PayloadLength).ToArray());
+            foreach (var md in mmb.Meshes) { m++; v += md.VertexCount; t += md.TriangleCount; }
+        }
+        var mzb = chunks.FirstOrDefault(c => c.Type == 0x1c);
+        if (mzb.LengthBytes > 0) ni = MzbDecoder.Decode(data.AsSpan(mzb.PayloadOffset, mzb.PayloadLength).ToArray()).Count;
+        sw.Stop();
+        times.Add(sw.Elapsed.TotalMilliseconds);
+        verts = v; tris = t; meshes = m; insts = ni;
+    }
+    times.Sort();
+    Console.WriteLine($"decode benchmark: {Path.GetFileName(file)}  ({n} runs)");
+    Console.WriteLine($"  meshes={meshes} verts={verts:N0} tris={tris:N0} placements={insts:N0}");
+    Console.WriteLine($"  median={times[n / 2]:0.0} ms   min={times[0]:0.0} ms   max={times[^1]:0.0} ms");
+    Console.WriteLine($"  (retail client zone-in is multiple SECONDS; this is the decode only)");
     return 0;
 }
 
