@@ -52,10 +52,19 @@ public partial class Main : Node3D
             AddChild(zone);
             GD.Print("Zone: " + report);
 
-            // Spawn above the zone centre, looking down at it.
             var c = b.GetCenter();
-            cam.Position = new Vector3(c.X, b.Position.Y + b.Size.Y + 80, c.Z + 80);
-            cam.RotationDegrees = new Vector3(-40, 0, 0);
+            if (System.Environment.GetEnvironmentVariable("VELLICHOR_GROUND") != null)
+            {
+                // Player-height view: are the gaps visible at ground level, or only from above?
+                cam.Position = new Vector3(c.X, c.Y + 4, c.Z);
+                cam.RotationDegrees = new Vector3(-5, 30, 0);
+            }
+            else
+            {
+                // Spawn above the zone centre, looking down at it.
+                cam.Position = new Vector3(c.X, b.Position.Y + b.Size.Y + 80, c.Z + 80);
+                cam.RotationDegrees = new Vector3(-40, 0, 0);
+            }
         }
         else
         {

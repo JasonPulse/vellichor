@@ -64,6 +64,8 @@ public static class ZoneLoader
                 AlbedoTexture = ImageTexture.CreateFromImage(gimg),
                 CullMode = BaseMaterial3D.CullModeEnum.Disabled,
                 ShadingMode = unlit ? BaseMaterial3D.ShadingModeEnum.Unshaded : BaseMaterial3D.ShadingModeEnum.PerPixel,
+                // NOTE: alpha cutout deferred — FFXI's 0..128 alpha convention (and DXT3's
+                // 4-bit alpha rescale) needs its own pass; scissor at 0.5 erased most texels.
             };
         }
 
