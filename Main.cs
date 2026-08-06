@@ -24,9 +24,10 @@ public partial class Main : Node3D
         var env = new Godot.Environment
         {
             BackgroundMode = Godot.Environment.BGMode.Color,
-            // Diagnostic: bright magenta background under VELLICHOR_SHOT so real holes
+            // Diagnostic: bright magenta background under VELLICHOR_MAGENTA so real holes
             // (see-through to background) are unmistakable vs merely dark surfaces.
-            BackgroundColor = _shot is null ? new Color(0.08f, 0.09f, 0.12f) : new Color(1f, 0f, 1f),
+            BackgroundColor = System.Environment.GetEnvironmentVariable("VELLICHOR_MAGENTA") is null
+                ? new Color(0.08f, 0.09f, 0.12f) : new Color(1f, 0f, 1f),
             AmbientLightSource = Godot.Environment.AmbientSource.Color,
             AmbientLightColor = new Color(0.7f, 0.72f, 0.78f),
             AmbientLightEnergy = 1.4f,

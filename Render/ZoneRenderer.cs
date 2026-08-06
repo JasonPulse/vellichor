@@ -10,6 +10,24 @@ public static class ZoneRenderer
     public static MeshInstance3D BuildMesh(MeshData m, Material? material = null)
         => new() { Mesh = BuildArrayMesh(m), MaterialOverride = material };
 
+    /// <summary>
+    /// Build an ArrayMesh from mesh data that is ALREADY in Godot world space (no Y-flip,
+    /// no winding reversal) — used for the collision-ground fill. Positions/indices only.
+    /// </summary>
+    public static ArrayMesh BuildRawMesh(MeshData m)
+    {
+        var verts = new Vector3[m.VertexCount];
+        for (int i = 0; i < verts.Length; i++)
+            verts[i] = new Vector3(m.Positions[i * 3], m.Positions[i * 3 + 1], m.Positions[i * 3 + 2]);
+        var arrays = new Godot.Collections.Array();
+        arrays.Resize((int)Mesh.ArrayType.Max);
+        arrays[(int)Mesh.ArrayType.Vertex] = verts;
+        arrays[(int)Mesh.ArrayType.Index] = m.Indices;
+        var mesh = new ArrayMesh();
+        mesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);
+        return mesh;
+    }
+
     /// <summary>Build a shareable ArrayMesh from decoded mesh data (cache + reuse across instances).</summary>
     public static ArrayMesh BuildArrayMesh(MeshData m)
     {

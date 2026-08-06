@@ -18,8 +18,10 @@ switch (mode)
     case "dump": return Dump(args.ElementAtOrDefault(1));
     case "hunt": return Hunt(args.ElementAtOrDefault(1));
     case "hex": return Hex(args);
-    case "mmb": return Mmb(args.ElementAtOrDefault(1));
+    case "mmb": return Mmb(args.ElementAtOrDefault(1), args.ElementAtOrDefault(2));
     case "mzb": return Mzb(args.ElementAtOrDefault(1));
+    case "tex": return Tex(args.ElementAtOrDefault(1));
+    case "coll": return Coll(args.ElementAtOrDefault(1));
     default: return IndexValidate(args);
 }
 
@@ -125,11 +127,29 @@ int Hunt(string? root)
 // Decode every MMB (0x2e) chunk in a zone file and report health: models, verts,
 // tris, clean vs failed, and the overall position bounding box. Sane numbers +
 // high clean-parse rate = the MMB layout is correct (before rendering).
-int Mmb(string? file)
+int Mmb(string? file, string? filter)
 {
-    if (file is null || !File.Exists(file)) { Console.Error.WriteLine("usage: mmb <file.DAT>"); return 1; }
+    if (file is null || !File.Exists(file)) { Console.Error.WriteLine("usage: mmb <file.DAT> [nameFilter]"); return 1; }
     var data = File.ReadAllBytes(file);
     var chunks = ChunkReader.Walk(data).Where(c => c.Type == 0x2e).ToList();
+
+    if (filter != null)
+    {
+        // Detailed per-chunk dump for MMBs whose id contains the filter.
+        foreach (var c in chunks)
+        {
+            var pl = data.AsSpan(c.PayloadOffset, c.PayloadLength).ToArray();
+            var m = MmbDecoder.Decode(pl); // decrypts in place
+            if (!m.MmbId.Contains(filter)) continue;
+            uint pieces = BitConverter.ToUInt32(pl, 0x20);
+            Console.WriteLine($"'{m.MmbId}'  payloadLen={c.PayloadLength}  flagByte(p[3])=0x{pl[3]:x2}  kind(p[4])={pl[4]}  " +
+                              $"pieces@0x20={pieces}  meshes={m.Meshes.Count}  diag='{m.Diag}'");
+            Console.Write("  header bytes: ");
+            for (int i = 0; i < 40 && i < pl.Length; i++) Console.Write($"{pl[i]:x2} ");
+            Console.WriteLine();
+        }
+        return 0;
+    }
 
     int okChunks = 0, failChunks = 0, models = 0, verts = 0, tris = 0;
     int spuriousTris = 0, badNormals = 0;
@@ -225,14 +245,19 @@ int Mzb(string? file)
     int negScale = insts.Count(i => i.ScaleX * i.ScaleY * i.ScaleZ < 0);
     Console.WriteLine($"max |scale|  : {maxAbsScale:0.##}   non-finite xf: {nonFinite}   |scale|>4: {bigScale}   neg-scale (mirrored): {negScale}");
 
-    // Cross-reference against the MMB ids present in this same file to see what's unresolved.
-    var mmbIds = new HashSet<string>();
+    // Which placements reference MMBs that produce NO renderable mesh (the potential holes)?
+    var withMesh = new HashSet<string>();
+    var zeroMesh = new HashSet<string>();
     foreach (var c in ChunkReader.Walk(data).Where(c => c.Type == 0x2e))
-        mmbIds.Add(MmbDecoder.Decode(data.AsSpan(c.PayloadOffset, c.PayloadLength).ToArray()).MmbId);
-    var unresolved = insts.Where(i => !mmbIds.Contains(i.Id)).ToList();
-    Console.WriteLine($"unresolved   : {unresolved.Count} placements, {unresolved.Select(i => i.Id).Distinct().Count()} distinct ids");
-    Console.WriteLine("  unresolved id samples: " + string.Join(", ",
-        unresolved.Select(i => i.Id).Distinct().Take(12).Select(s => $"'{s}'")));
+    {
+        var m = MmbDecoder.Decode(data.AsSpan(c.PayloadOffset, c.PayloadLength).ToArray());
+        if (m.Meshes.Count > 0) withMesh.Add(m.MmbId); else zeroMesh.Add(m.MmbId);
+    }
+    var unresolved = insts.Where(i => !withMesh.Contains(i.Id)).ToList();
+    Console.WriteLine($"placements with NO renderable mesh: {unresolved.Count} ({unresolved.Select(i => i.Id).Distinct().Count()} distinct ids)");
+    Console.WriteLine("  distinct zero-mesh ids referenced by placements:");
+    foreach (var g in unresolved.GroupBy(i => i.Id).OrderByDescending(g => g.Count()))
+        Console.WriteLine($"    '{g.Key}'  x{g.Count()}");
     if (insts.Count > 0)
     {
         Console.WriteLine($"pos AABB     : X[{insts.Min(i => i.PosX):0.#}..{insts.Max(i => i.PosX):0.#}] " +
@@ -243,6 +268,59 @@ int Mzb(string? file)
             Console.WriteLine($"  id='{i.Id}' pos=({i.PosX:0.#},{i.PosY:0.#},{i.PosZ:0.#}) " +
                               $"rot=({i.RotX:0.##},{i.RotY:0.##},{i.RotZ:0.##}) scale=({i.ScaleX:0.##},{i.ScaleY:0.##},{i.ScaleZ:0.##})");
     }
+    return 0;
+}
+
+// ---- mode: coll -----------------------------------------------------------
+int Coll(string? file)
+{
+    if (file is null || !File.Exists(file)) { Console.Error.WriteLine("usage: coll <file.DAT>"); return 1; }
+    var data = File.ReadAllBytes(file);
+    var mzb = ChunkReader.Walk(data).FirstOrDefault(c => c.Type == 0x1c);
+    if (mzb.LengthBytes == 0) { Console.Error.WriteLine("no MZB"); return 1; }
+    var m = MzbCollisionDecoder.Decode(data.AsSpan(mzb.PayloadOffset, mzb.PayloadLength).ToArray());
+    if (m is null) { Console.WriteLine("collision decode returned null"); return 0; }
+    float mnx = float.MaxValue, mny = float.MaxValue, mnz = float.MaxValue, mxx = float.MinValue, mxy = float.MinValue, mxz = float.MinValue;
+    for (int v = 0; v < m.VertexCount; v++)
+    {
+        float x = m.Positions[v * 3], y = m.Positions[v * 3 + 1], z = m.Positions[v * 3 + 2];
+        if (x < mnx) mnx = x; if (y < mny) mny = y; if (z < mnz) mnz = z;
+        if (x > mxx) mxx = x; if (y > mxy) mxy = y; if (z > mxz) mxz = z;
+    }
+    Console.WriteLine($"collision mesh: {m.VertexCount:N0} verts, {m.TriangleCount:N0} tris");
+    Console.WriteLine($"world AABB: X[{mnx:0.#}..{mxx:0.#}] Y[{mny:0.#}..{mxy:0.#}] Z[{mnz:0.#}..{mxz:0.#}]");
+    return 0;
+}
+
+// ---- mode: tex ------------------------------------------------------------
+// Audit every IMG texture: format, size, and average luminance — to find black ones.
+int Tex(string? file)
+{
+    if (file is null || !File.Exists(file)) { Console.Error.WriteLine("usage: tex <file.DAT>"); return 1; }
+    var data = File.ReadAllBytes(file);
+    int black = 0, total = 0;
+    Console.WriteLine($"{"id",-18}{"fmt",-8}{"size",-12}{"avgLum",-8}avgA");
+    foreach (var c in ChunkReader.Walk(data).Where(c => c.Type == 0x20))
+    {
+        var p = data.AsSpan(c.PayloadOffset, c.PayloadLength).ToArray();
+        ImgTexture? t;
+        try { t = ImgDecoder.Decode(p); } catch { continue; }
+        if (t is null) continue;
+        total++;
+        // format tag
+        string fmt;
+        uint fourcc = p.Length >= 0x3D ? (uint)(p[0x39] | p[0x3A] << 8 | p[0x3B] << 16 | p[0x3C] << 24) : 0;
+        if (fourcc == 0x44585431) fmt = "DXT1";
+        else if (fourcc == 0x44585433) fmt = "DXT3";
+        else fmt = (BitConverter.ToUInt32(p, 0x1D) == 0x200001 ? "direct32" : $"pal{BitConverter.ToUInt32(p, 0x35)}");
+        long lum = 0, alpha = 0; int n = t.Width * t.Height;
+        for (int i = 0; i < n; i++) { lum += t.Rgba[i * 4] + t.Rgba[i * 4 + 1] + t.Rgba[i * 4 + 2]; alpha += t.Rgba[i * 4 + 3]; }
+        int avgLum = (int)(lum / (n * 3)); int avgA = (int)(alpha / n);
+        if (avgLum < 12) black++;
+        if (avgLum < 40 || total <= 8)
+            Console.WriteLine($"{t.Id,-18}{fmt,-8}{t.Width + "x" + t.Height,-12}{avgLum,-8}{avgA}");
+    }
+    Console.WriteLine($"\n{total} textures, {black} near-black (avgLum<12)");
     return 0;
 }
 

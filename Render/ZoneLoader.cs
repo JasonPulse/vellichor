@@ -103,13 +103,39 @@ public static class ZoneLoader
                 max = new Vector3(Mathf.Max(max.X, w.X), Mathf.Max(max.Y, w.Y), Mathf.Max(max.Z, w.Z));
             }
         }
+        // Collision-mesh ground fill: the continuous walkable surface, rendered untextured
+        // just below the visual tiles so textures win where they exist and this fills the
+        // gaps/paths (no more see-through holes). Already world-space + Y-flipped in the decoder.
+        int collVerts = 0;
+        if (mzb.LengthBytes > 0)
+        {
+            var coll = MzbCollisionDecoder.Decode(data.AsSpan(mzb.PayloadOffset, mzb.PayloadLength).ToArray());
+            if (coll is { VertexCount: > 0 })
+            {
+                collVerts = coll.VertexCount;
+                var groundMat = new StandardMaterial3D
+                {
+                    AlbedoColor = new Color(0.42f, 0.44f, 0.34f),   // earth tone
+                    ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
+                    CullMode = BaseMaterial3D.CullModeEnum.Disabled,
+                };
+                root.AddChild(new MeshInstance3D
+                {
+                    Mesh = ZoneRenderer.BuildRawMesh(coll),
+                    MaterialOverride = groundMat,
+                    Position = new Vector3(0, -2.0f, 0),            // sit under the visual tiles so they win
+                });
+            }
+        }
+
         sw.Stop();
 
         worldBounds = placed > 0 ? new Aabb(min, max - min) : new Aabb(Vector3.Zero, Vector3.One);
 
         report = $"{zoneName} [{zoneCode}] loaded in {sw.Elapsed.TotalMilliseconds:0} ms " +
                  $"(read {readMs:0}, decode {decodeMs:0}) — {meshesById.Count} MMB ids / {models} meshes, " +
-                 $"{texMat.Count} textures, {placed} instances placed, {missing} unresolved.";
+                 $"{texMat.Count} textures, {placed} instances placed, {missing} unresolved, " +
+                 $"{collVerts:N0} collision-ground verts.";
         return root;
     }
 
