@@ -152,7 +152,7 @@ int Mmb(string? file, string? filter)
     }
 
     int okChunks = 0, failChunks = 0, models = 0, verts = 0, tris = 0;
-    int spuriousTris = 0, badNormals = 0;
+    int spuriousTris = 0, badNormals = 0, badIdx = 0, meshesWithBadIdx = 0;
     float minX = float.MaxValue, minY = float.MaxValue, minZ = float.MaxValue;
     float maxX = float.MinValue, maxY = float.MinValue, maxZ = float.MinValue;
     var sampleDiags = new List<string>();
@@ -184,6 +184,10 @@ int Mmb(string? file, string? filter)
                     float nx = nrm[v*3], ny = nrm[v*3+1], nz = nrm[v*3+2];
                     if (!float.IsFinite(nx+ny+nz) || (nx*nx+ny*ny+nz*nz) < 1e-6f) badNormals++;
                 }
+            // out-of-range indices (galkareeve validates & skips the mesh if any index >= vertexCount)
+            int mbad = 0;
+            foreach (int ix in mesh.Indices) if (ix < 0 || ix >= mesh.VertexCount) mbad++;
+            if (mbad > 0) { badIdx += mbad; meshesWithBadIdx++; }
             // spurious triangles: any edge longer than the mesh itself
             var idx = mesh.Indices;
             for (int t = 0; t + 2 < idx.Length; t += 3)
@@ -198,6 +202,7 @@ int Mmb(string? file, string? filter)
     Console.WriteLine($"models       : {models}");
     Console.WriteLine($"vertices     : {verts:N0}");
     Console.WriteLine($"triangles    : {tris:N0}");
+    Console.WriteLine($"bad indices  : {badIdx:N0} in {meshesWithBadIdx} meshes   (index >= vertexCount = garbage/spike triangles)");
     Console.WriteLine($"spurious tris: {spuriousTris:N0}   (edge longer than the model itself = strip bridge artifact)");
     Console.WriteLine($"bad normals  : {badNormals:N0}   (zero/NaN → renders black)");
     if (verts > 0)

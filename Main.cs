@@ -56,9 +56,9 @@ public partial class Main : Node3D
             var c = b.GetCenter();
             if (System.Environment.GetEnvironmentVariable("VELLICHOR_GROUND") != null)
             {
-                // Player-height view: are the gaps visible at ground level, or only from above?
-                cam.Position = new Vector3(c.X, c.Y + 4, c.Z);
-                cam.RotationDegrees = new Vector3(-5, 30, 0);
+                // Shallow field-level view (like the user's screenshots).
+                cam.Position = new Vector3(c.X - 150, b.Position.Y + b.Size.Y + 25, c.Z + 250);
+                cam.RotationDegrees = new Vector3(-12, -25, 0);
             }
             else
             {

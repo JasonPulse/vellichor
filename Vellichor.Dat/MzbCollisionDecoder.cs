@@ -117,6 +117,27 @@ public static class MzbCollisionDecoder
         }
 
         if (positions.Count == 0) return null;
-        return new MeshData { Positions = positions.ToArray(), Indices = indices.ToArray() };
+
+        // Smooth per-vertex normals (accumulate face normals) so the fill is lit and its
+        // curvature reads — collision blocks carry no usable per-vertex normals for this.
+        var pos = positions.ToArray();
+        var idxA = indices.ToArray();
+        var nrm = new float[pos.Length];
+        for (int t = 0; t + 2 < idxA.Length; t += 3)
+        {
+            int a = idxA[t], b = idxA[t + 1], c = idxA[t + 2];
+            float ax = pos[a * 3], ay = pos[a * 3 + 1], az = pos[a * 3 + 2];
+            float ux = pos[b * 3] - ax, uy = pos[b * 3 + 1] - ay, uz = pos[b * 3 + 2] - az;
+            float vx = pos[c * 3] - ax, vy = pos[c * 3 + 1] - ay, vz = pos[c * 3 + 2] - az;
+            float nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+            foreach (int i in stackalloc[] { a, b, c }) { nrm[i * 3] += nx; nrm[i * 3 + 1] += ny; nrm[i * 3 + 2] += nz; }
+        }
+        for (int v = 0; v < pos.Length / 3; v++)
+        {
+            float nx = nrm[v * 3], ny = nrm[v * 3 + 1], nz = nrm[v * 3 + 2];
+            float len = (float)System.Math.Sqrt(nx * nx + ny * ny + nz * nz);
+            if (len > 1e-6f) { nrm[v * 3] = nx / len; nrm[v * 3 + 1] = ny / len; nrm[v * 3 + 2] = nz / len; }
+        }
+        return new MeshData { Positions = pos, Normals = nrm, Indices = idxA };
     }
 }

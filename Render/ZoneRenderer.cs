@@ -22,6 +22,13 @@ public static class ZoneRenderer
         var arrays = new Godot.Collections.Array();
         arrays.Resize((int)Mesh.ArrayType.Max);
         arrays[(int)Mesh.ArrayType.Vertex] = verts;
+        if (m.Normals is { Length: > 0 })
+        {
+            var normals = new Vector3[m.Normals.Length / 3];
+            for (int i = 0; i < normals.Length; i++)
+                normals[i] = new Vector3(m.Normals[i * 3], m.Normals[i * 3 + 1], m.Normals[i * 3 + 2]);
+            arrays[(int)Mesh.ArrayType.Normal] = normals;
+        }
         arrays[(int)Mesh.ArrayType.Index] = m.Indices;
         var mesh = new ArrayMesh();
         mesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);

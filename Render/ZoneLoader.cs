@@ -49,8 +49,11 @@ public static class ZoneLoader
 
         bool unlit = System.Environment.GetEnvironmentVariable("VELLICHOR_UNLIT") != null;
 
-        // Decode IMG (0x20) textures and build one material per texture id.
+        // Decode IMG (0x20) textures and build one material per texture id. Also pick the
+        // biggest bright texture as a grass proxy for the collision-ground fill.
         var texMat = new Dictionary<string, StandardMaterial3D>();
+        Texture2D? grassTex = null;
+        long grassScore = 0;
         foreach (var c in chunks)
         {
             if (c.Type != 0x20) continue;
@@ -59,9 +62,19 @@ public static class ZoneLoader
             catch { continue; } // a malformed texture must never crash the whole zone load
             if (img is null || texMat.ContainsKey(img.Id)) continue;
             var gimg = Image.CreateFromData(img.Width, img.Height, false, Image.Format.Rgba8, img.Rgba);
+            var itex = ImageTexture.CreateFromImage(gimg);
+            // grass proxy: prefer the largest green-dominant, mid-bright texture.
+            long sr = 0, sg = 0, sb = 0; int n = img.Width * img.Height;
+            for (int i = 0; i < n; i++) { sr += img.Rgba[i * 4]; sg += img.Rgba[i * 4 + 1]; sb += img.Rgba[i * 4 + 2]; }
+            double avgLum = (sr + sg + sb) / (double)(n * 3);
+            if (n > 0 && avgLum is > 50 and < 210 && sg > sr * 1.05 && sg > sb * 1.05)
+            {
+                long score = (long)img.Width * img.Height;
+                if (score > grassScore) { grassScore = score; grassTex = itex; }
+            }
             texMat[img.Id] = new StandardMaterial3D
             {
-                AlbedoTexture = ImageTexture.CreateFromImage(gimg),
+                AlbedoTexture = itex,
                 CullMode = BaseMaterial3D.CullModeEnum.Disabled,
                 ShadingMode = unlit ? BaseMaterial3D.ShadingModeEnum.Unshaded : BaseMaterial3D.ShadingModeEnum.PerPixel,
                 // NOTE: alpha cutout deferred — FFXI's 0..128 alpha convention (and DXT3's
@@ -115,15 +128,24 @@ public static class ZoneLoader
                 collVerts = coll.VertexCount;
                 var groundMat = new StandardMaterial3D
                 {
-                    AlbedoColor = new Color(0.42f, 0.44f, 0.34f),   // earth tone
-                    ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
                     CullMode = BaseMaterial3D.CullModeEnum.Disabled,
+                    ShadingMode = unlit ? BaseMaterial3D.ShadingModeEnum.Unshaded : BaseMaterial3D.ShadingModeEnum.PerPixel,
                 };
+                if (grassTex is not null)
+                {
+                    // Triplanar grass so the fill reads as ground following the curved
+                    // walkable surface, not a flat coloured patch that pokes up.
+                    groundMat.AlbedoTexture = grassTex;
+                    groundMat.Uv1Triplanar = true;
+                    groundMat.Uv1Scale = new Vector3(0.03f, 0.03f, 0.03f);
+                }
+                else groundMat.AlbedoColor = new Color(0.42f, 0.44f, 0.34f);
+
                 root.AddChild(new MeshInstance3D
                 {
                     Mesh = ZoneRenderer.BuildRawMesh(coll),
                     MaterialOverride = groundMat,
-                    Position = new Vector3(0, -2.0f, 0),            // sit under the visual tiles so they win
+                    Position = new Vector3(0, -0.3f, 0),            // just under the visual tiles
                 });
             }
         }
