@@ -20,6 +20,17 @@ public partial class Main : Node3D
         // Debug: if VELLICHOR_SHOT is set, render a few frames, save a PNG, and quit.
         _shot = System.Environment.GetEnvironmentVariable("VELLICHOR_SHOT");
 
+        // DAT texture browser: VELLICHOR_VIEW=<dat-file-or-folder> shows a thumbnail grid
+        // (for inspecting/identifying mod textures) instead of loading the zone.
+        string? viewPath = System.Environment.GetEnvironmentVariable("VELLICHOR_VIEW");
+        if (viewPath is not null)
+        {
+            var layer = new CanvasLayer();
+            layer.AddChild(new Vellichor.Render.DatViewer(viewPath));
+            AddChild(layer);
+            return;
+        }
+
         // Ambient + sun so untextured meshes are visible from any angle.
         var env = new Godot.Environment
         {
