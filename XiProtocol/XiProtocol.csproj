@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <!--
+    Shared FFXI wire-protocol + world-state, LINKED from the headless bot (single source of
+    truth, XiHeadless untouched). Net/ + Game/ are self-contained (only external refs are the
+    Log logger + Geometry, both provided/linked here). Targets net8.0 so the net8.0 Godot
+    project can reference it (XiHeadless itself stays net9.0).
+  -->
+  <ItemGroup>
+    <Compile Include="../../../C#/Personal/XiHeadless/Net/**/*.cs" LinkBase="Net" />
+    <Compile Include="../../../C#/Personal/XiHeadless/Game/**/*.cs" LinkBase="Game" />
+    <Compile Include="../../../C#/Personal/XiHeadless/Interfaces/ISession.cs" LinkBase="Interfaces" />
+    <Compile Include="../../../C#/Personal/XiHeadless/Geometry.cs" LinkBase="root" />
+    <!-- Bot-logic files (not wire protocol / world state) — depend on bot-layer enums. -->
+    <Compile Remove="../../../C#/Personal/XiHeadless/Net/BotApi.cs" />
+    <Compile Remove="../../../C#/Personal/XiHeadless/Game/QuestDefs.cs" />
+    <Compile Remove="../../../C#/Personal/XiHeadless/Game/Vendors.cs" />
+    <Compile Remove="../../../C#/Personal/XiHeadless/Game/HuntZones.cs" />
+    <Compile Remove="../../../C#/Personal/XiHeadless/Game/PartyRoles.cs" />
+  </ItemGroup>
+</Project>
