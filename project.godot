@@ -1,0 +1,18 @@
+; Vellichor — Godot 4.7 (C#, mono)
+; Engine configuration. Regenerated/extended by the Godot editor.
+
+config_version=5
+
+[application]
+
+config/name="Vellichor"
+run/main_scene="res://Main.tscn"
+config/features=PackedStringArray("4.7", "C#", "Forward Plus")
+
+[dotnet]
+
+project/assembly_name="Vellichor"
+
+[rendering]
+
+renderer/rendering_method="forward_plus"

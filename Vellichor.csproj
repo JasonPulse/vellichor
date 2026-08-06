@@ -1,0 +1,37 @@
+<Project Sdk="Godot.NET.Sdk/4.7.1">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <RootNamespace>Vellichor</RootNamespace>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="Vellichor.Dat/Vellichor.Dat.csproj" />
+  </ItemGroup>
+
+  <!-- Godot.NET.Sdk globs **/*.cs; exclude sibling projects so each compiles only its
+       own sources (Wanehollow idiom). -->
+  <ItemGroup>
+    <Compile Remove="Vellichor.Dat/**/*.cs" />
+    <Compile Remove="tools/**/*.cs" />
+  </ItemGroup>
+
+  <!--
+    The protocol stack (crypto / compression / lobby+map session / WorldState) is
+    NOT re-implemented here. It is shared with the headless client via a class
+    library — see docs/DESIGN.md ("Integration"). When that library exists, add:
+
+      <ItemGroup>
+        <ProjectReference Include="../../C#/Personal/XiProtocol/XiProtocol.csproj" />
+      </ItemGroup>
+
+    and mirror Wanehollow's glob-exclusion so Godot.NET.Sdk doesn't pull the
+    sibling project's sources into this assembly:
+
+      <ItemGroup>
+        <Compile Remove="../../C#/Personal/XiProtocol/**/*.cs" />
+      </ItemGroup>
+  -->
+</Project>

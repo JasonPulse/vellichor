@@ -1,0 +1,19 @@
+# Godot 4
+.godot/
+*.translation
+
+# .NET
+bin/
+obj/
+*.user
+
+# Rider
+.idea/
+
+# macOS
+.DS_Store
+
+# Local-only asset corpus + scratch (never commit game data or private notes)
+.local/
+corpus/
+*.local.md
