@@ -24,8 +24,14 @@ public partial class EntityRenderer : Node3D
 
     public void Update(WorldState ws)
     {
+        // WorldState.Entities is mutated by the bridge's receive-loop thread; snapshot
+        // defensively (skip this frame if the copy races) rather than iterate live.
+        Entity[] ents;
+        try { ents = System.Linq.Enumerable.ToArray(ws.Entities.Values); }
+        catch { return; }
+
         var seen = new HashSet<uint>();
-        foreach (var e in ws.Entities.Values)
+        foreach (var e in ents)
         {
             seen.Add(e.Id);
             var pos = new Vector3(e.X, -e.Y, e.Z); // FFXI Y-down -> Godot Y-up

@@ -15,6 +15,14 @@ public partial class Main : Node3D
     private string? _shot;
     private int _frames;
 
+    // Live server bridge (VELLICHOR_ACCOUNT/PASSWORD): connects, renders live entities, then
+    // does a timed graceful logout so the session is never left stale.
+    private Vellichor.Net.EntityBridge? _bridge;
+    private EntityRenderer? _entityRenderer;
+    private double _liveElapsed;
+    private double _liveDuration = 20; // observe seconds before graceful logout
+    private bool _liveLoggingOut;
+
     public override void _Ready()
     {
         // Debug: if VELLICHOR_SHOT is set, render a few frames, save a PNG, and quit.
@@ -101,6 +109,23 @@ public partial class Main : Node3D
                 er.Update(demo);
             }
 
+            // Live entities: VELLICHOR_ACCOUNT (+ VELLICHOR_PASSWORD) connects to the LSB
+            // server, selects the EXISTING char (never creates), and streams live entities into
+            // the renderer. _Process does a timed graceful logout so the session isn't stale.
+            string? acct = System.Environment.GetEnvironmentVariable("VELLICHOR_ACCOUNT");
+            if (acct is not null)
+            {
+                _entityRenderer = new EntityRenderer();
+                AddChild(_entityRenderer);
+                _bridge = new Vellichor.Net.EntityBridge();
+                string pass = System.Environment.GetEnvironmentVariable("VELLICHOR_PASSWORD") ?? "";
+                string resDir = ProjectSettings.GlobalizePath("res://res");
+                if (double.TryParse(System.Environment.GetEnvironmentVariable("VELLICHOR_LIVE_SECS"), out var s)) _liveDuration = s;
+                GD.Print($"[live] connecting as '{acct}' -> ffxi.network-gnomes.com (select-existing, no create)");
+                _ = System.Threading.Tasks.Task.Run(() =>
+                    _bridge.ConnectAsync("ffxi.network-gnomes.com", "30251101_2", acct, pass, resDir));
+            }
+
             var c = b.GetCenter();
             if (System.Environment.GetEnvironmentVariable("VELLICHOR_GROUND") != null)
             {
@@ -126,6 +151,27 @@ public partial class Main : Node3D
 
     public override void _Process(double delta)
     {
+        // Live session: stream entities into the renderer, log status ~1/s, then a timed
+        // graceful logout (Shutdown blocks ~40s) before quitting so the session isn't stale.
+        if (_bridge is not null)
+        {
+            if (_bridge.State is not null && _entityRenderer is not null) _entityRenderer.Update(_bridge.State);
+            int prev = (int)_liveElapsed;
+            _liveElapsed += delta;
+            if ((int)_liveElapsed != prev)
+                GD.Print($"[live] t={(int)_liveElapsed}s  {_bridge.Status}  entities={_bridge.State?.Entities.Count ?? 0}");
+            if (!_liveLoggingOut && _liveElapsed >= _liveDuration)
+            {
+                _liveLoggingOut = true;
+                if (_shot is not null) { GetViewport().GetTexture().GetImage().SavePng(_shot); GD.Print($"saved -> {_shot}"); }
+                GD.Print($"[live] observe done: {_bridge.Status}; entities={_bridge.State?.Entities.Count ?? 0}. graceful logout (~40s)...");
+                _bridge.Shutdown();
+                GD.Print("[live] logged out cleanly.");
+                GetTree().Quit();
+            }
+            return;
+        }
+
         if (_shot is null) return;
         if (++_frames != 10) return;
         var img = GetViewport().GetTexture().GetImage();
