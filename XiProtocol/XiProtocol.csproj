@@ -4,6 +4,8 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- Godot's export builds with ExportDebug/ExportRelease; referenced non-Godot projects must define them. -->
+    <Configurations>Debug;Release;ExportDebug;ExportRelease</Configurations>
 
     <!-- Publishable as a NuGet package so the DAT viewer (separate repo) consumes the shared wire types. -->
     <IsPackable>true</IsPackable>

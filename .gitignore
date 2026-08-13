@@ -1,6 +1,7 @@
 # Godot 4
 .godot/
 *.translation
+*.uid          # per-import script UIDs — regenerated on import; scene refs here use paths, not uid://
 
 # .NET
 bin/

@@ -5,6 +5,8 @@
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
     <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Godot's export builds with ExportDebug/ExportRelease; referenced non-Godot projects must define them. -->
+    <Configurations>Debug;Release;ExportDebug;ExportRelease</Configurations>
 
     <!-- Publishable as a NuGet package so the DAT viewer (separate repo) consumes the shared decoders. -->
     <IsPackable>true</IsPackable>
