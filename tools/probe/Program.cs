@@ -17,7 +17,13 @@ switch (mode)
     case "scan": return Scan(args.ElementAtOrDefault(1));
     case "dump": return Dump(args.ElementAtOrDefault(1));
     case "hunt": return Hunt(args.ElementAtOrDefault(1));
+    case "zones": return Zones(args.ElementAtOrDefault(1));
+    case "models": return Models(args.ElementAtOrDefault(1), args.ElementAtOrDefault(2));
+    case "skel": return Skel(args.ElementAtOrDefault(1));
+    case "fid": return Fid(args);
+    case "catscan": return CatScan(args);
     case "hex": return Hex(args);
+    case "anim": return Anim(args.ElementAtOrDefault(1), args.ElementAtOrDefault(2));
     case "mmb": return Mmb(args.ElementAtOrDefault(1), args.ElementAtOrDefault(2));
     case "mzb": return Mzb(args.ElementAtOrDefault(1));
     case "tex": return Tex(args.ElementAtOrDefault(1));
@@ -121,6 +127,131 @@ int Hunt(string? root)
     Console.WriteLine("\nlargest chunked files (terrain candidates):");
     foreach (var c in candidates.OrderByDescending(c => c.size).Take(20))
         Console.WriteLine($"  {c.size / 1024,8} KB  dom=0x{c.domType:x2}  {c.rel}  [{c.names}]");
+    return 0;
+}
+
+// ---- mode: fid ------------------------------------------------------------
+// Verify the xi-tinkerer zone-data id formula on THIS install: for each zone id given (or a
+// default sweep), file id = 100+id (0..255) / 83891+(id-256) (256+); resolve via FTABLE and
+// report the path + its zone-code tag. `fid <corpusRoot> [id ...]`
+int Fid(string[] a)
+{
+    string root = a.Length > 1 && Directory.Exists(a[1]) ? a[1]
+        : Environment.GetEnvironmentVariable("VELLICHOR_DAT_ROOT") ?? DefaultRoot;
+    if (!Directory.Exists(root)) { Console.Error.WriteLine($"!! root not found: {root}"); return 1; }
+    var dat = new DatArchive(root);
+
+    var ids = a.Skip(1).Where(s => int.TryParse(s, out _)).Select(int.Parse).ToList();
+    if (ids.Count == 0) ids = new List<int> { 100, 101, 102, 103, 104, 105, 106, 107, 115, 116, 117, 118, 122, 123, 124, 125, 126, 127 };
+
+    Console.WriteLine($"{"zone",-6}{"fileid",-8}{"code",-8}{"path",-24}mmb");
+    foreach (var id in ids)
+    {
+        int fileId = id <= 255 ? 100 + id : 83891 + (id - 256);
+        var p = dat.ResolveFileId(fileId);
+        if (p is null || !File.Exists(p)) { Console.WriteLine($"{id,-6}{fileId,-8}(unresolved)"); continue; }
+        byte[] data = File.ReadAllBytes(p);
+        var chunks = ChunkReader.Walk(data);
+        string code = chunks.Select(c => c.Name).FirstOrDefault(n => n.StartsWith("f_") || n.StartsWith("d_"))
+            ?? (chunks.Count > 0 ? chunks[0].Name : "?");
+        int mmb = chunks.Count(c => c.Type == 0x2e);
+        string rel = p.StartsWith(root) ? p[(root.Length + 1)..] : p;
+        Console.WriteLine($"{id,-6}{fileId,-8}{code,-8}{rel,-24}{mmb}");
+    }
+    return 0;
+}
+
+// ---- mode: skel -----------------------------------------------------------
+// Decode the 0x29 skeleton in a model DAT, validate quaternions, compose world bind-pose joint
+// positions, and report the spread — a humanoid should be ~2 units tall, wider than deep.
+int Skel(string? file)
+{
+    if (file is null || !File.Exists(file)) { Console.Error.WriteLine("usage: skel <file.DAT>"); return 1; }
+    var data = File.ReadAllBytes(file);
+    var chunk = ChunkReader.Walk(data).FirstOrDefault(c => c.Type == 0x29);
+    if (chunk.LengthBytes == 0) { Console.Error.WriteLine("no 0x29 skeleton chunk"); return 1; }
+    var payload = data.AsSpan(chunk.PayloadOffset, chunk.PayloadLength).ToArray();
+    var sk = Vellichor.Dat.ModelDecoder.DecodeSkeleton(payload);
+    Console.WriteLine($"skeleton '{chunk.Name}': {sk.Diag}");
+
+    // Compose world bind pose: world = parent_world * (translate * rotate).
+    int n = sk.Bones.Length;
+    var wr = new System.Numerics.Quaternion[n];
+    var wp = new System.Numerics.Vector3[n];
+    var min = new System.Numerics.Vector3(float.MaxValue);
+    var max = new System.Numerics.Vector3(float.MinValue);
+    for (int i = 0; i < n; i++)
+    {
+        var b = sk.Bones[i];
+        var lq = new System.Numerics.Quaternion(b.Qx, b.Qy, b.Qz, b.Qw);
+        var lt = new System.Numerics.Vector3(b.Tx, b.Ty, b.Tz);
+        if (b.Parent >= 0 && b.Parent < i)
+        {
+            wr[i] = wr[b.Parent] * lq;
+            wp[i] = wp[b.Parent] + System.Numerics.Vector3.Transform(lt, wr[b.Parent]);
+        }
+        else { wr[i] = lq; wp[i] = lt; }
+        min = System.Numerics.Vector3.Min(min, wp[i]);
+        max = System.Numerics.Vector3.Max(max, wp[i]);
+    }
+    var size = max - min;
+    Console.WriteLine($"joint spread: size=({size.X:0.00},{size.Y:0.00},{size.Z:0.00}) min=({min.X:0.0},{min.Y:0.0},{min.Z:0.0}) max=({max.X:0.0},{max.Y:0.0},{max.Z:0.0})");
+    for (int i = 0; i < Math.Min(6, n); i++)
+        Console.WriteLine($"  bone{i} parent={sk.Bones[i].Parent} t=({sk.Bones[i].Tx:0.00},{sk.Bones[i].Ty:0.00},{sk.Bones[i].Tz:0.00})");
+    return 0;
+}
+
+// ---- mode: models ---------------------------------------------------------
+// Model DATs: have MMB (0x2e) geometry but NO MZB (0x1c) — i.e. objects/creatures/NPCs, not zones.
+// `models <ROMtreeRoot> [nameFilter]`. Lists rel path, first chunk name (model id), mmb + img counts.
+int Models(string? root, string? filter)
+{
+    if (root is null || !Directory.Exists(root)) { Console.Error.WriteLine("usage: models <ROMtreeRoot> [nameFilter]"); return 1; }
+    var rows = new List<(string name, string rel, int mmb, int img, long kb)>();
+    foreach (var f in Directory.EnumerateFiles(root, "*.DAT", SearchOption.AllDirectories))
+    {
+        byte[] data;
+        try { data = File.ReadAllBytes(f); } catch { continue; }
+        var chunks = ChunkReader.Walk(data);
+        if (chunks.Count == 0 || !ChunkReader.LooksChunked(data)) continue;
+        int mmb = chunks.Count(c => c.Type == 0x2e), mzb = chunks.Count(c => c.Type == 0x1c);
+        if (mmb == 0 || mzb > 0) continue; // want MMB-only (models), not zones
+        int img = chunks.Count(c => c.Type == 0x20);
+        string name = chunks.Count > 0 ? chunks[0].Name : "?";
+        if (filter != null && !name.Contains(filter) && !f.Contains(filter)) continue;
+        rows.Add((name, f[(root.Length + 1)..], mmb, img, data.Length / 1024));
+    }
+    Console.WriteLine($"{rows.Count} model DATs (MMB, no MZB) under {root}\n{"name",-10}{"path",-22}{"mmb",5}{"img",5}{"size",9}");
+    foreach (var r in rows.OrderByDescending(r => r.mmb).Take(60))
+        Console.WriteLine($"{r.name,-10}{r.rel,-22}{r.mmb,5}{r.img,5}{r.kb,7} KB");
+    return 0;
+}
+
+// ---- mode: zones ----------------------------------------------------------
+// Every zone-geometry DAT (has an MZB 0x1c) with its zone-code tag (f_xx field /
+// d_xx dungeon, from the first chunk name) and its relative ROM path. This is the
+// raw material for the zone-id -> DAT table (join the code to a zone-id list).
+int Zones(string? root)
+{
+    if (root is null || !Directory.Exists(root)) { Console.Error.WriteLine("usage: zones <ROMtreeRoot>"); return 1; }
+    var rows = new List<(string code, string rel, long kb, int mmb)>();
+    foreach (var f in Directory.EnumerateFiles(root, "*.DAT", SearchOption.AllDirectories))
+    {
+        byte[] data;
+        try { data = File.ReadAllBytes(f); } catch { continue; }
+        var chunks = ChunkReader.Walk(data);
+        if (chunks.Count == 0 || !ChunkReader.LooksChunked(data)) continue;
+        if (!chunks.Any(c => c.Type == 0x1c)) continue; // MZB = a placed zone
+        // Zone code = the first f_/d_ tagged chunk name (falls back to the first name).
+        string code = chunks.Select(c => c.Name)
+            .FirstOrDefault(n => n.StartsWith("f_") || n.StartsWith("d_"))
+            ?? chunks[0].Name;
+        rows.Add((code, f[(root.Length + 1)..], data.Length / 1024, chunks.Count(c => c.Type == 0x2e)));
+    }
+    Console.WriteLine($"{rows.Count} zone-geometry DATs (MZB-bearing) under {root}\n");
+    Console.WriteLine($"{"code",-8}{"path",-22}{"size",10}  mmb");
+    foreach (var r in rows.OrderBy(r => r.code, StringComparer.Ordinal))
+        Console.WriteLine($"{r.code,-8}{r.rel,-22}{r.kb,8} KB  {r.mmb}");
     return 0;
 }
 
@@ -384,6 +515,7 @@ int Hex(string[] a)
     int wantType = Convert.ToInt32(a[2], 16);
     int which = int.Parse(a[3]);
     int nBytes = a.Length > 4 ? int.Parse(a[4]) : 96;
+    int startOff = a.Length > 5 ? int.Parse(a[5]) : 0;
     if (!File.Exists(file)) { Console.Error.WriteLine("no such file"); return 1; }
 
     var data = File.ReadAllBytes(file);
@@ -391,8 +523,8 @@ int Hex(string[] a)
     var matches = chunks.Where(c => c.Type == wantType).ToList();
     if (which >= matches.Count) { Console.Error.WriteLine($"only {matches.Count} chunks of type 0x{wantType:x2}"); return 1; }
     var ch = matches[which];
-    Console.WriteLine($"chunk '{ch.Name}' type=0x{ch.Type:x2} len={ch.LengthBytes} payload@{ch.PayloadOffset} payloadLen={ch.PayloadLength}");
-    int start = ch.PayloadOffset, count = Math.Min(nBytes, ch.PayloadLength);
+    Console.WriteLine($"chunk '{ch.Name}' type=0x{ch.Type:x2} len={ch.LengthBytes} payload@{ch.PayloadOffset} payloadLen={ch.PayloadLength} startOff={startOff}");
+    int start = ch.PayloadOffset + startOff, count = Math.Min(nBytes, ch.PayloadLength - startOff);
     for (int row = 0; row < count; row += 16)
     {
         var hex = new System.Text.StringBuilder();
@@ -413,6 +545,75 @@ int Hex(string[] a)
     return 0;
 }
 
+// ---- mode: anim -----------------------------------------------------------
+// Decode a 0x2b skeletal animation chunk and report validation stats. `anim <file.DAT> [which]`.
+// The strongest correctness signal is that EVERY baked rotation quaternion has |q| ~ 1.
+int Anim(string? file, string? whichArg)
+{
+    if (file is null || !File.Exists(file)) { Console.Error.WriteLine("usage: anim <file.DAT> [which]"); return 1; }
+    var data = File.ReadAllBytes(file);
+    var anims = ChunkReader.Walk(data).Where(c => c.Type == 0x2b).ToList();
+    if (anims.Count == 0) { Console.Error.WriteLine("no 0x2b animation chunk"); return 1; }
+
+    int only = int.TryParse(whichArg, out var w) ? w : -1;
+    for (int idx = 0; idx < anims.Count; idx++)
+    {
+        if (only >= 0 && idx != only) continue;
+        var c = anims[idx];
+        var payload = data.AsSpan(c.PayloadOffset, c.PayloadLength).ToArray();
+        Vellichor.Dat.ModelDecoder.Animation anim;
+        try { anim = Vellichor.Dat.ModelDecoder.DecodeAnimation(payload); }
+        catch (Exception ex) { Console.WriteLine($"[{idx}] '{c.Name}' DECODE ERROR: {ex.GetType().Name}: {ex.Message}"); continue; }
+
+        // Quaternion norm stats + per-bone keyframe / animated-channel counts.
+        double minN = double.MaxValue, maxN = double.MinValue, sumN = 0; int nq = 0, badN = 0;
+        int animatedTracks = 0, constTracks = 0;
+        int minFr = int.MaxValue, maxFr = int.MinValue; bool monotonic = true;
+        foreach (var tr in anim.Tracks)
+        {
+            bool anyMove = false;
+            int prev = -1;
+            foreach (var k in tr.Keys)
+            {
+                var q = k.Rot;
+                double m = Math.Sqrt((double)q.X * q.X + (double)q.Y * q.Y + (double)q.Z * q.Z + (double)q.W * q.W);
+                minN = Math.Min(minN, m); maxN = Math.Max(maxN, m); sumN += m; nq++;
+                if (m < 0.98 || m > 1.02) badN++;
+                if (k.Frame < minFr) minFr = k.Frame;
+                if (k.Frame > maxFr) maxFr = k.Frame;
+                if (k.Frame <= prev) monotonic = prev == -1 || k.Frame > prev ? monotonic : false;
+                if (prev >= 0 && k.Frame <= prev) monotonic = false;
+                prev = k.Frame;
+            }
+            // track is "animated" if any rotation varies across frames
+            if (tr.Keys.Length > 1)
+                for (int i = 1; i < tr.Keys.Length; i++)
+                    if (tr.Keys[i].Rot != tr.Keys[0].Rot || tr.Keys[i].Trans != tr.Keys[0].Trans) { anyMove = true; break; }
+            if (anyMove) animatedTracks++; else constTracks++;
+        }
+
+        Console.WriteLine($"[{idx}] '{c.Name}'  {anim.Diag}");
+        Console.WriteLine($"      payloadLen={payload.Length}  tracks={anim.Tracks.Length}  animated={animatedTracks} const={constTracks}");
+        Console.WriteLine($"      frameIdx range=[{minFr}..{maxFr}] (expect [0..{anim.NumFrames - 1}]) monotonic={monotonic}");
+        Console.WriteLine($"      quat |q|: min={minN:0.0000} max={maxN:0.0000} mean={(nq == 0 ? 0 : sumN / nq):0.0000}  nonUnit={badN}/{nq}");
+
+        // Sample a couple of animated bones at frame 0 and mid-frame.
+        int shown = 0;
+        foreach (var tr in anim.Tracks)
+        {
+            if (shown >= 3) break;
+            bool moves = false;
+            for (int i = 1; i < tr.Keys.Length; i++) if (tr.Keys[i].Rot != tr.Keys[0].Rot) { moves = true; break; }
+            if (!moves) continue;
+            var k0 = tr.Keys[0]; var km = tr.Keys[tr.Keys.Length / 2];
+            Console.WriteLine($"        bone{tr.Bone} f0 rot=({k0.Rot.X:0.###},{k0.Rot.Y:0.###},{k0.Rot.Z:0.###},{k0.Rot.W:0.###}) t=({k0.Trans.X:0.##},{k0.Trans.Y:0.##},{k0.Trans.Z:0.##})");
+            Console.WriteLine($"        bone{tr.Bone} f{tr.Keys.Length / 2} rot=({km.Rot.X:0.###},{km.Rot.Y:0.###},{km.Rot.Z:0.###},{km.Rot.W:0.###}) t=({km.Trans.X:0.##},{km.Trans.Y:0.##},{km.Trans.Z:0.##})");
+            shown++;
+        }
+    }
+    return 0;
+}
+
 // ---- mode: dump -----------------------------------------------------------
 int Dump(string? file)
 {
@@ -428,3 +629,97 @@ int Dump(string? file)
     }
     return 0;
 }
+
+// ---- mode: catscan --------------------------------------------------------
+// RAW file-id -> path resolver + category classifier. For every file id in
+// [0,maxId), resolve via VTABLE/FTABLE, read the DAT, and classify by chunk
+// types present:
+//   MODEL   = has 0x29 (skeleton) AND 0x2a (mesh)  -> character/creature/PC-equip model
+//   MMBONLY = has 0x2e (MMB) and NO 0x1c (MZB)      -> static object model
+//   ZONE    = has 0x1c (MZB)                        -> placed zone geometry
+// Emits contiguous file-id ranges per category, and reverse-resolves a set of
+// known sample paths back to their file ids.  usage: catscan <corpusRoot> [maxId]
+int CatScan(string[] a)
+{
+    string root = a.Length > 1 && Directory.Exists(a[1]) ? a[1]
+        : Environment.GetEnvironmentVariable("VELLICHOR_DAT_ROOT") ?? DefaultRoot;
+    if (!Directory.Exists(root)) { Console.Error.WriteLine($"!! root not found: {root}"); return 1; }
+    int maxId = a.Length > 2 && int.TryParse(a[2], out var m) ? m : 120000;
+    var dat = new DatArchive(root);
+    Console.WriteLine($"catscan root={root} maxId={maxId} sets=[{string.Join(",", dat.LoadedSets)}]");
+
+    // targets to reverse-resolve (ROM-relative, forward slashes)
+    string[] targets = { "ROM9/2/8.DAT", "ROM9/0/70.DAT", "ROM9/1/0.DAT" };
+    var found = new Dictionary<string, int>();
+
+    // classification per id: 0 none,1 ENTITY(0x29+0x2a),5 MESH(0x2a no 0x29),
+    //   2 MMB(0x2e no MZB),3 ZONE(0x1c),4 chunked-other
+    var cls = new byte[maxId];
+    int nEntity = 0, nMesh = 0, nMmb = 0, nZone = 0;
+    // per-ROM-set tallies of each category (index by set 1..9)
+    var setEntity = new int[20];
+    var setMesh = new int[20];
+    for (int id = 0; id < maxId; id++)
+    {
+        var p = dat.ResolveFileId(id);
+        if (p is null || !File.Exists(p)) continue;
+        // reverse map for targets
+        string rel = p[(root.Length + 1)..].Replace('\\', '/');
+        if (Array.IndexOf(targets, rel) >= 0) found[rel] = id;
+        int set = int.Parse(rel.Split('/')[0].Substring(3) is "" ? "1" : rel.Split('/')[0].Substring(3));
+
+        byte[] data;
+        try { data = File.ReadAllBytes(p); } catch { continue; }
+        var chunks = ChunkReader.Walk(data);
+        if (chunks.Count == 0 || !ChunkReader.LooksChunked(data)) continue;
+        var types = chunks.Select(c => c.Type).ToHashSet();
+        if (types.Contains(0x29) && types.Contains(0x2a)) { cls[id] = 1; nEntity++; setEntity[set]++; }
+        else if (types.Contains(0x2a)) { cls[id] = 5; nMesh++; setMesh[set]++; }
+        else if (types.Contains(0x1c)) { cls[id] = 3; nZone++; }
+        else if (types.Contains(0x2e)) { cls[id] = 2; nMmb++; }
+        else cls[id] = 4;
+    }
+    Console.WriteLine($"totals: ENTITY(0x29+0x2a)={nEntity}  MESH(0x2a,no0x29)={nMesh}  MMB(0x2e,noMZB)={nMmb}  ZONE(0x1c)={nZone}\n");
+    Console.WriteLine("per ROM-set: " + string.Join("  ", Enumerable.Range(1, 9)
+        .Select(s => $"ROM{(s == 1 ? "" : s.ToString())}:ent={setEntity[s]},mesh={setMesh[s]}")));
+
+    Console.WriteLine("\n== ENTITY file-id ranges (0x29+0x2a: race base / monster / NPC) ==");
+    EmitRanges(cls, 1, dat, root, maxId);
+    Console.WriteLine("\n== MESH file-id ranges (0x2a only: equipment / weapon / attachment) ==");
+    EmitRanges(cls, 5, dat, root, maxId);
+    Console.WriteLine("\n== ZONE file-id ranges ==");
+    EmitRanges(cls, 3, dat, root, maxId);
+
+    Console.WriteLine("\n== reverse-resolve of sample creature-model paths ==");
+    foreach (var t in targets)
+        Console.WriteLine(found.TryGetValue(t, out var fid)
+            ? $"  {t,-16} -> fileId {fid}  (class={ClsName(cls[fid])})"
+            : $"  {t,-16} -> NOT FOUND in [0,{maxId})");
+    return 0;
+}
+
+void EmitRanges(byte[] cls, byte want, DatArchive dat, string root, int maxId)
+{
+    int runStart = -1, count = 0;
+    for (int id = 0; id <= maxId; id++)
+    {
+        bool hit = id < maxId && cls[id] == want;
+        if (hit && runStart < 0) runStart = id;
+        else if (!hit && runStart >= 0)
+        {
+            int runEnd = id - 1;
+            int n = runEnd - runStart + 1;
+            string ps = RelOf(dat, root, runStart), pe = RelOf(dat, root, runEnd);
+            Console.WriteLine($"  [{runStart}..{runEnd}]  n={n,-6} {ps} .. {pe}");
+            runStart = -1; count += n;
+        }
+    }
+}
+
+string RelOf(DatArchive dat, string root, int id)
+{
+    var p = dat.ResolveFileId(id);
+    return p is null ? "?" : p[(root.Length + 1)..].Replace('\\', '/');
+}
+
+string ClsName(byte c) => c switch { 1 => "ENTITY", 5 => "MESH", 2 => "MMB", 3 => "ZONE", 4 => "chunked-other", _ => "none" };

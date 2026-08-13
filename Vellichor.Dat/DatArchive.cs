@@ -76,6 +76,30 @@ public sealed class DatArchive
         return null;
     }
 
+    /// <summary>Highest file id any loaded VTABLE could describe (for a full scan).</summary>
+    public int MaxFileId => _sets.Count == 0 ? -1 : _sets.Max(s => s.VTable.Length) - 1;
+
+    /// <summary>
+    /// Every mapped (file id → absolute .DAT path) pair across all ROM sets. Lets a tool build the
+    /// reverse map (path → id) so a browsed file can show its numeric id, and vice-versa. Skips the
+    /// overlay check (returns base-install paths) so the map is stable.
+    /// </summary>
+    public IEnumerable<(int id, string path)> EnumerateAll()
+    {
+        foreach (var s in _sets)
+        {
+            int max = s.VTable.Length;
+            for (int id = 0; id < max; id++)
+            {
+                if (s.VTable[id] != s.Index) continue;
+                int off = 2 * id;
+                if (off + 1 >= s.FTable.Length) continue;
+                ushort fileDir = (ushort)(s.FTable[off] | (s.FTable[off + 1] << 8));
+                yield return (id, Path.Combine(s.Folder, (fileDir >> 7).ToString(), $"{fileDir & 0x7F}.DAT"));
+            }
+        }
+    }
+
     /// <summary>Reads the raw bytes for a file id. Throws if the id is unmapped or missing.</summary>
     public byte[] ReadFileId(int fileId)
     {

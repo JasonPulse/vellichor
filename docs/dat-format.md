@@ -460,3 +460,41 @@ chunked files with their zone-name tags; pick the `f_`/`d_` file you want.
   in a shared/character DAT — M1 follow-up).
 - **Still to verify visually (M0 close-out):** Y-flip (FFXI Y-down → Godot Y-up), rotation
   euler order (XYZ hypothesis), winding/culling. These can only be confirmed on-screen.
+
+---
+
+## 7. Character / NPC / creature models (0x29 skeleton, 0x2a mesh, 0x2b anim)
+
+Character/NPC/creature models use the **same DATHEAD container** but are **PLAINTEXT** — NO DatCrypt
+(unlike zone MMB/MZB). A monster/NPC is **one self-contained DAT**; a player character is assembled
+from a race skeleton + per-slot equipment DATs + a face DAT (harder, deferred).
+
+Chunk types (verified): `0x01` name header · `0x07` init/pop scripts (ignore) · **`0x29` skeleton** ·
+**`0x2a` skinned mesh** · **`0x2b` animation** (idl0/wlk0/run0/btl0) · `0x45` info · `0x20` texture.
+Find model DATs with `tools/probe models <ROMdir>` (MMB-free, i.e. not zones). Good samples:
+`ROM9/0/70.DAT` (tiny monster), `ROM9/2/8.DAT` (`npc_`, textured, `gold` skeleton + `hh_b` mesh + walk/run/idle).
+
+### 0x29 skeleton — DECODED + rendering (Vellichor.Dat/ModelDecoder.cs)
+Array of **30-byte BONE records** after a small header (**hdr=4** on the samples; auto-detected by
+max unit-quaternion count). Per record: `parent u8 @0`, `flags u8 @1`, `quat(x,y,z,w) 4×f32 @2`,
+`trans(x,y,z) 3×f32 @18`. LOCAL bind pose → compose down `parent`. `tools/probe skel <file>` reports
+it; `VELLICHOR_MODEL=<file>` renders the joints. Verified: `ROM9/2/8` `gold` → a coherent quadruped
+skeleton (head/spine/4 legs/tail). ~a few records per skeleton are garbage — skip non-unit-quat /
+|trans|>20 bones (ModelViewer.BuildSkeleton does this). `clea` (ROM9/0/70) is degenerate with this
+layout (2/155) — a special small model; revisit.
+
+### 0x2a skinned mesh — HEADER CONFIRMED, vertex packing = REMAINING RE
+`DAT2AHeader` (0x40 bytes) is a **directory of 6 contiguous sections** (each `offset u32, size u16`),
+verified: each section's offset == previous end. Fields: `ver u8@0, type u16@2 (0=normal,1=cloth),
+flip u16@4, Poly(off@6,sz@0xA), BoneTbl(@0xC,@0x10), Weight(@0x12,@0x16), Bone(@0x18,@0x1C),
+Vertex(@0x1E,@0x22), PolyLoad(@0x24,@0x28)`. Example (hh_b): Poly@32 sz32876, BoneTbl sz113,
+Weight sz2, Bone sz2976, Vertex sz36672.
+⚠️ The section BODIES are NOT plain float arrays — Poly starts with a sub-header (u16s incl. the
+Vertex size + counts), Bone shows repeating bone-index patterns (e.g. 0x3F), Vertex floats read as
+garbage at the raw offset. Positions are likely **int16 fixed-point** with per-bone sub-runs, at
+possibly-unaligned offsets. NEXT: dump each section on the small hh_d mesh, find the fixed-point
+scale + the MODELVERTEX1(rigid 1-bone)/MODELVERTEX2(blended 2-bone) field layout + how Bone/Weight/
+BoneTbl partition vertices per bone; feed pos/normal/uv/boneIdx/weight into the VERIFIED
+`Render/SkinnedMeshBuilder` (Skeleton3D + skin) to render bind pose. Struct lineage: galkareeve
+TDWAnalysis.h (BONE, DAT2AHeader, MODELVERTEX1/2, TEXLIST). Player-char assembly + which-file-id
+tables via AltanaViewer List/PC/<Race>/<Slot>.csv (equipment modelid = row index → ROM path).

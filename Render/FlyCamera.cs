@@ -13,6 +13,9 @@ public partial class FlyCamera : Camera3D
     [Export] public float Sensitivity = 0.003f;
     [Export] public float TurnSpeed = 1.6f; // radians/sec for arrow-key look
 
+    /// When false, the free-fly input is disabled (the player-follow camera drives it instead).
+    public bool Active = true;
+
     private float _pitch;
     private float _yaw;
     private bool _looking;
@@ -27,6 +30,7 @@ public partial class FlyCamera : Camera3D
 
     public override void _Input(InputEvent @event)
     {
+        if (!Active) return;
         if (@event is InputEventMouseButton mb && mb.ButtonIndex == MouseButton.Right)
         {
             _looking = mb.Pressed;
@@ -47,6 +51,7 @@ public partial class FlyCamera : Camera3D
 
     public override void _Process(double delta)
     {
+        if (!Active) return;
         // Arrow-key look: Left/Right yaw, Up/Down pitch.
         float turn = TurnSpeed * (float)delta;
         bool turned = false;

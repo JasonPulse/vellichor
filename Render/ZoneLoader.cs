@@ -67,11 +67,13 @@ public static class ZoneLoader
             var itex = ImageTexture.CreateFromImage(gimg);
             // grass proxy: prefer the largest green-dominant, mid-bright texture.
             // Also count transparent texels to decide alpha-cutout (foliage/fences) vs opaque.
-            long sr = 0, sg = 0, sb = 0; int n = img.Width * img.Height, transp = 0;
+            long sr = 0, sg = 0, sb = 0; int n = img.Width * img.Height;
+            int clear = 0, edge = 0;   // fully-transparent texels, and partial-alpha "edge" texels
             for (int i = 0; i < n; i++)
             {
                 sr += img.Rgba[i * 4]; sg += img.Rgba[i * 4 + 1]; sb += img.Rgba[i * 4 + 2];
-                if (img.Rgba[i * 4 + 3] < 128) transp++;
+                byte a = img.Rgba[i * 4 + 3];
+                if (a < 24) clear++; else if (a < 232) edge++;
             }
             double avgLum = (sr + sg + sb) / (double)(n * 3);
             if (n > 0 && avgLum is > 50 and < 210 && sg > sr * 1.05 && sg > sb * 1.05)
@@ -79,16 +81,23 @@ public static class ZoneLoader
                 long score = (long)img.Width * img.Height;
                 if (score > grassScore) { grassScore = score; grassTex = itex; }
             }
-            _ = transp; // (FFXI DXT3 alpha isn't a clean cutout channel for ground — see below)
+            // Foliage / fence / decal cutout: a texture with a MEANINGFUL block of fully-transparent texels
+            // (>18%) but few partial-alpha texels is a hole-punch sprite (palm fronds, grates), not ground.
+            // Ground DXT3 alpha is near-opaque (tiny clear fraction) so it stays opaque and doesn't speckle.
+            double clearFrac = n > 0 ? clear / (double)n : 0;
+            double edgeFrac = n > 0 ? edge / (double)n : 0;
+            // Require a LARGE clear fraction (real sprites — fronds/grates — are mostly empty) so bimodal
+            // ground (which has a small clear fraction) never qualifies and the terrain doesn't speckle.
+            bool cutout = clearFrac > 0.40 && edgeFrac < 0.30;
             texMat[img.Id] = new StandardMaterial3D
             {
                 AlbedoTexture = itex,
                 CullMode = BaseMaterial3D.CullModeEnum.Disabled,
                 TextureFilter = BaseMaterial3D.TextureFilterEnum.LinearWithMipmapsAnisotropic,
                 ShadingMode = unlit ? BaseMaterial3D.ShadingModeEnum.Unshaded : BaseMaterial3D.ShadingModeEnum.PerPixel,
-                // Alpha-cutout deferred: FFXI ground DXT3 alpha is low/varied (not a
-                // transparency mask), so scissor speckled the terrain. Needs per-texture
-                // classification (foliage vs ground) beyond a simple alpha threshold.
+                // Alpha-scissor only classified cutout textures; ground stays opaque (avoids the speckle).
+                Transparency = cutout ? BaseMaterial3D.TransparencyEnum.AlphaScissor : BaseMaterial3D.TransparencyEnum.Disabled,
+                AlphaScissorThreshold = cutout ? 0.5f : 0f,
             };
         }
 
@@ -130,9 +139,10 @@ public static class ZoneLoader
                 var rot = Basis.FromEuler(new Vector3(inst.RotX, inst.RotY, inst.RotZ), EulerOrder.Xyz);
                 var fbasis = rot * Basis.Identity.Scaled(new Vector3(inst.ScaleX, inst.ScaleY, inst.ScaleZ));
                 var xform = new Transform3D(fbasis, new Vector3(inst.PosX, inst.PosY, inst.PosZ));
-                // net world = flipY(det -1) · fbasis. Reverse winding when net is a reflection
-                // so all baked triangles wind consistently for the normal computation.
-                bool reverse = fbasis.Determinant() > 0;
+                // net world = flipXY(det +1) · fbasis. FFXI is LEFT-handed; we negate BOTH X (un-mirror
+                // vs retail) and Y (Y-down -> Godot Y-up). Two flips preserve winding parity, so reverse
+                // when fbasis itself is a reflection, keeping baked triangles consistent for normals.
+                bool reverse = fbasis.Determinant() < 0;
                 foreach (var md in meshList)
                 {
                     var a = AccFor(md.TextureId);
@@ -140,7 +150,7 @@ public static class ZoneLoader
                     for (int v = 0; v < md.VertexCount; v++)
                     {
                         var wf = xform * new Vector3(md.Positions[v * 3], md.Positions[v * 3 + 1], md.Positions[v * 3 + 2]);
-                        float wx = wf.X, wy = -wf.Y, wz = wf.Z;
+                        float wx = -wf.X, wy = -wf.Y, wz = wf.Z; // negate X (un-mirror) + Y (up)
                         a.pos.Add(wx); a.pos.Add(wy); a.pos.Add(wz);
                         a.uv.Add(md.Uvs is { Length: > 0 } ? md.Uvs[v * 2] : 0);
                         a.uv.Add(md.Uvs is { Length: > 0 } ? md.Uvs[v * 2 + 1] : 0);

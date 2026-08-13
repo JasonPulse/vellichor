@@ -1,0 +1,139 @@
+name: Release
+
+# Semantic-release drives versioning off Conventional Commits on `master`:
+#   feat: -> minor, fix: -> patch, feat!/BREAKING CHANGE -> major.
+# When a release is cut it: tags vX.Y.Z, updates CHANGELOG.md, creates the GitHub Release,
+# then the build jobs attach the client apps and publish the shared decoder as NuGet packages.
+# The repo is self-contained (XiHeadless sources are vendored under XiProtocol/vendor/), so CI
+# is a single normal checkout — no cross-repo token needed.
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write      # create tags/releases, commit CHANGELOG
+  packages: write      # publish NuGet to GitHub Packages
+  issues: write
+  pull-requests: write
+
+env:
+  GODOT_VERSION: "4.7.1"
+  DOTNET_VERSION: "8.0.x"
+
+jobs:
+  # ---------------------------------------------------------------------------------------------
+  release:
+    name: Semantic release (version + GitHub release)
+    runs-on: ubuntu-latest
+    outputs:
+      published: ${{ steps.semantic.outputs.new_release_published }}
+      version: ${{ steps.semantic.outputs.new_release_version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Run semantic-release
+        id: semantic
+        uses: cycjimmy/semantic-release-action@v4
+        with:
+          semantic_version: 24
+          extra_plugins: |
+            @semantic-release/changelog@6
+            @semantic-release/git@10
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ---------------------------------------------------------------------------------------------
+  build-client:
+    name: Export client (${{ matrix.name }})
+    needs: release
+    if: needs.release.outputs.published == 'true'
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows
+            runner: ubuntu-latest        # Godot cross-exports Windows from Linux
+            preset: "Windows Desktop"
+            out: build/windows/Vellichor.exe
+            asset: Vellichor-windows-x86_64
+          - name: macos
+            runner: macos-latest
+            preset: "macOS"
+            out: build/macos/Vellichor.zip
+            asset: Vellichor-macos-universal
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.release.outputs.version }}
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+      - name: Setup Godot ${{ env.GODOT_VERSION }} (.NET)
+        uses: chickensoft-games/setup-godot@v2
+        with:
+          version: ${{ env.GODOT_VERSION }}
+          use-dotnet: false
+          include-templates: true
+      - name: Build C# + import
+        run: |
+          dotnet build Vellichor.csproj -c ExportRelease
+          godot --headless --import . || true
+      - name: Export
+        run: |
+          mkdir -p "$(dirname "${{ matrix.out }}")"
+          godot --headless --export-release "${{ matrix.preset }}" "${{ matrix.out }}"
+      - name: Package
+        run: |
+          cd "$(dirname "${{ matrix.out }}")"
+          zip -r "${{ matrix.asset }}-v${{ needs.release.outputs.version }}.zip" .
+          echo "ASSET=$PWD/${{ matrix.asset }}-v${{ needs.release.outputs.version }}.zip" >> "$GITHUB_ENV"
+      - name: Attach to release
+        run: gh release upload "v${{ needs.release.outputs.version }}" "$ASSET" --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ---------------------------------------------------------------------------------------------
+  publish-libs:
+    name: Publish shared decoder (NuGet + render source)
+    needs: release
+    if: needs.release.outputs.published == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.release.outputs.version }}
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+      - name: Pack pure-C# decoder libs
+        run: |
+          V="${{ needs.release.outputs.version }}"
+          for proj in Vellichor.Dat/Vellichor.Dat.csproj XiProtocol/XiProtocol.csproj; do
+            dotnet pack "$proj" -c Release -o nupkgs \
+              -p:PackageVersion=$V -p:Version=$V \
+              -p:RepositoryUrl=https://github.com/${{ github.repository }}
+          done
+      - name: Push to GitHub Packages
+        run: |
+          dotnet nuget add source --username ${{ github.actor }} --password ${{ secrets.GITHUB_TOKEN }} \
+            --store-password-in-clear-text --name github \
+            "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json"
+          dotnet nuget push "nupkgs/*.nupkg" --source github --skip-duplicate
+      - name: Bundle Godot-typed render sources (for the DAT viewer to vendor)
+        run: |
+          V="${{ needs.release.outputs.version }}"
+          zip -j "Vellichor.Render.Source-v$V.zip" \
+            Render/CharacterModel.cs Render/SkinnedMeshBuilder.cs Render/AnimationDriver.cs Render/ModelResolver.cs
+          gh release upload "v$V" "Vellichor.Render.Source-v$V.zip" --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

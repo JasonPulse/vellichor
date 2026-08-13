@@ -5,5 +5,11 @@
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
     <ImplicitUsings>enable</ImplicitUsings>
+
+    <!-- Publishable as a NuGet package so the DAT viewer (separate repo) consumes the shared decoders. -->
+    <IsPackable>true</IsPackable>
+    <PackageId>Vellichor.Dat</PackageId>
+    <Authors>Vellichor</Authors>
+    <Description>Pure-C# decoders for FINAL FANTASY XI on-disk DAT archives: FTABLE/VTABLE index, chunk containers, IMG textures, MMB/skinned models, skeletons and animations, plus retail-install detection. Reads a retail installation you own; ships no game data.</Description>
   </PropertyGroup>
 </Project>

@@ -23,6 +23,12 @@ public sealed class MeshData
     /// <summary>Hex of the 16-byte texture id this mesh binds (matched against IMG chunks), if any.</summary>
     public string? TextureId { get; init; }
 
+    /// <summary>Skinning: 4 skeleton bone indices per vertex (null for unskinned zone meshes).</summary>
+    public int[]? BoneIndices { get; init; }
+
+    /// <summary>Skinning: 4 bone weights per vertex, summing to 1 (parallel to BoneIndices).</summary>
+    public float[]? BoneWeights { get; init; }
+
     public int VertexCount => Positions.Length / 3;
     public int TriangleCount => Indices.Length / 3;
 }

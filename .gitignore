@@ -17,3 +17,23 @@ obj/
 .local/
 corpus/
 *.local.md
+
+# FFXI GAME DATA — NEVER COMMIT (copyright + size). Read from the user's own retail
+# install at runtime; the path is configured in settings, not bundled in the repo.
+*.dat
+*.DAT
+ROM/
+ROM[0-9]/
+ROM[0-9][0-9]/
+VTABLE*
+FTABLE*
+
+# Build / export output (release artifacts are produced by CI, not committed)
+export/
+build/
+dist/
+*.pck
+*.exe
+*.dmg
+*.app/
+*.zip
